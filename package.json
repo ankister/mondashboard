@@ -1,7 +1,7 @@
 {
   "name": "homedash",
   "version": "1.0.0",
-  "description": "Dashboard homelab modulaire : serveurs, Docker, médias, torrents, calendrier, RSS, favoris",
+  "description": "Dashboard auto-hébergé modulaire : serveurs, Docker, médias, torrents, calendrier, RSS, favoris",
   "type": "module",
   "main": "server.js",
   "scripts": {

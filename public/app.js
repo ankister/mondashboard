@@ -630,6 +630,46 @@ function rssReader(w, el, it) {
   $('[data-close2]', m.el).onclick = m.close;
 }
 
+// ---------- météo : pictogrammes au trait et couleurs de température ----------
+function tempColor(t) {
+  const stops = [[-10, [110, 160, 255]], [0, [120, 190, 235]], [8, [120, 205, 200]], [15, [130, 215, 150]], [22, [235, 215, 110]], [28, [245, 165, 85]], [35, [235, 95, 85]]];
+  if (t <= stops[0][0]) return `rgb(${stops[0][1]})`;
+  for (let i = 1; i < stops.length; i++) {
+    const [t1, c1] = stops[i];
+    const [t0, c0] = stops[i - 1];
+    if (t <= t1) {
+      const k = (t - t0) / (t1 - t0);
+      return `rgb(${c0.map((v, j) => Math.round(v + (c1[j] - v) * k)).join(',')})`;
+    }
+  }
+  return `rgb(${stops.at(-1)[1]})`;
+}
+function wxIcon(kind, day = true, size = 64) {
+  const cloud = (x = 0, y = 0, s = 1, fill = 'none') => `<path transform="translate(${x} ${y}) scale(${s})" d="M18 46h28a11 11 0 0 0 1-22 15 15 0 0 0-28-4 10 10 0 0 0-1 26z" fill="${fill}" stroke="#e8f1fb" stroke-width="${3 / s}" stroke-linejoin="round"/>`;
+  const sun = (x, y, r) => `<g stroke="#ffc94a" stroke-width="2.6" stroke-linecap="round" fill="none"><circle cx="${x}" cy="${y}" r="${r}"/>${[0, 45, 90, 135, 180, 225, 270, 315].map(a => {
+    const rad = a * Math.PI / 180, r1 = r + 4, r2 = r + 8;
+    return `<line x1="${x + r1 * Math.cos(rad)}" y1="${y + r1 * Math.sin(rad)}" x2="${x + r2 * Math.cos(rad)}" y2="${y + r2 * Math.sin(rad)}"/>`;
+  }).join('')}</g>`;
+  const moon = (x, y, r) => `<path d="M${x + r * 0.35} ${y - r} a${r} ${r} 0 1 0 ${r * 0.9} ${r * 1.55} a${r * 0.8} ${r * 0.8} 0 0 1 ${-r * 0.9} ${-r * 1.55}z" fill="#7cc4f0"/>`;
+  const drops = n => [...Array(n)].map((_, i) => `<line x1="${24 + i * 8}" y1="50" x2="${21 + i * 8}" y2="58" stroke="#5aa9ff" stroke-width="2.6" stroke-linecap="round"/>`).join('');
+  const flakes = `<g fill="#e8f1fb">${[24, 34, 44].map(x => `<circle cx="${x}" cy="54" r="2.2"/>`).join('')}</g>`;
+  let g;
+  switch (kind) {
+    case 'clear': g = day ? sun(32, 32, 11) : moon(30, 32, 14); break;
+    case 'mostly-clear': g = (day ? sun(24, 22, 8) : moon(20, 20, 9)) + cloud(14, 10, 0.75, 'var(--card)'); break;
+    case 'partly': g = (day ? sun(22, 20, 8) : moon(18, 16, 9)) + cloud(6, 6, 0.9, 'var(--card)'); break;
+    case 'cloudy': g = cloud(0, 2, 1); break;
+    case 'fog': g = cloud(0, -4, 1) + [50, 56].map(y => `<line x1="14" y1="${y}" x2="50" y2="${y}" stroke="#9fb3c5" stroke-width="2.6" stroke-linecap="round"/>`).join(''); break;
+    case 'drizzle': g = cloud(0, -4, 1) + drops(2); break;
+    case 'rain': case 'showers': g = (kind === 'showers' && day ? sun(46, 14, 6) : '') + cloud(0, -4, 1, kind === 'showers' ? 'var(--card)' : 'none') + drops(3); break;
+    case 'heavy-rain': g = cloud(0, -4, 1) + drops(4); break;
+    case 'snow': g = cloud(0, -4, 1) + flakes; break;
+    case 'storm': g = cloud(0, -4, 1) + '<path d="M33 46l-6 9h7l-4 8" fill="none" stroke="#ffc94a" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>'; break;
+    default: g = cloud(0, 2, 1);
+  }
+  return `<svg class="wxi" width="${size}" height="${size}" viewBox="0 0 64 64" aria-hidden="true">${g}</svg>`;
+}
+
 const RENDER = {
   bookmarks: {
     static(w) {
@@ -1008,19 +1048,61 @@ const RENDER = {
   },
 
   weather: {
-    dyn(d) {
+    bind(w, el) {
+      // molette verticale → défilement horizontal du bandeau des heures
+      el.addEventListener('wheel', e => {
+        const strip = e.target.closest('.wx-hours');
+        if (!strip || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+        if (strip.scrollWidth <= strip.clientWidth) return;
+        e.preventDefault();
+        strip.scrollLeft += e.deltaY;
+      }, { passive: false });
+      // horloge du widget, mise à jour toutes les 10 s
+      S.timers.push(setInterval(() => {
+        const c = $('.wx-clock', el);
+        if (c) c.textContent = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+      }, 10000));
+    },
+    dyn(d, w) {
+      const cfg = w.config || {};
       const c = d.current;
-      return `
-        <div class="wx-now">
-          <div class="wx-ico">${c.icon}</div>
-          <div><div class="wx-temp">${Math.round(c.temp)}°</div><div class="muted small">${esc(d.city)} · ${esc(c.label)}</div></div>
-          <div class="small muted" style="margin-left:auto;text-align:right">Ressenti ${Math.round(c.feels)}°<br>💧 ${c.humidity} % · 💨 ${Math.round(c.wind)} km/h</div>
-        </div>
-        <div class="wx-days">${d.days.map((x, i) => `
-          <div><div class="muted">${i === 0 ? 'Auj.' : new Date(x.date).toLocaleDateString('fr-FR', { weekday: 'short' })}</div>
-          <div class="i" title="${esc(x.label)}">${x.icon}</div>
-          <div><b>${Math.round(x.max)}°</b> <span class="muted">${Math.round(x.min)}°</span></div>
-          ${x.rain != null ? `<div class="muted">💧${x.rain}%</div>` : ''}</div>`).join('')}</div>`;
+      const now = new Date();
+      const head = `
+        <div class="wx-top">
+          <div class="wx-big">${wxIcon(c.kind, c.day)}</div>
+          <div class="wx-info">
+            <div class="wx-line"><span class="wx-t">🌡 ${Math.round(c.temp)}°C</span><span>${esc(c.label)}</span></div>
+            ${cfg.showClock !== false ? `
+              <div class="wx-clock">${now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</div>
+              <div class="wx-date">📅 ${esc(now.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }))}</div>`
+              : `<div class="wx-clock">${Math.round(c.temp)}°</div>`}
+            <div class="wx-sub">${esc(d.city || '')}${d.city ? ' · ' : ''}ressenti ${Math.round(c.feels)}° · 💧 ${c.humidity} % · 💨 ${Math.round(c.wind)} km/h</div>
+          </div>
+        </div>`;
+      const hourly = cfg.showHourly !== false && d.hours?.length ? `
+        <div class="wx-hours">${d.hours.map(h => `
+          <div class="wx-h" title="${esc(h.label)}${h.rain != null ? ` · pluie ${h.rain} %` : ''}">
+            <span class="wx-ht">${esc(h.time)}</span>${wxIcon(h.kind, h.day, 30)}<b>${Math.round(h.temp)}°</b>
+            ${h.rain ? `<span class="wx-hr">💧${h.rain}%</span>` : '<span class="wx-hr"></span>'}
+          </div>`).join('')}</div>` : '';
+      let daily = '';
+      if (cfg.showDaily !== false && d.days?.length) {
+        const lo = Math.min(...d.days.map(x => x.min)), hi = Math.max(...d.days.map(x => x.max));
+        const span = Math.max(1, hi - lo), pos = t => ((t - lo) / span) * 100;
+        daily = `<div class="wx-days2">${d.days.map((x, i) => {
+          const left = pos(x.min), width = Math.max(4, pos(x.max) - left);
+          const mark = i === 0 && c.temp >= x.min - 1 && c.temp <= x.max + 1
+            ? `<i class="wx-mark" style="left:calc(${Math.min(100, Math.max(0, pos(c.temp)))}% - 9px)"></i>` : '';
+          return `<div class="wx-d" title="${esc(x.label)}${x.rain != null ? ` · pluie ${x.rain} %` : ''}">
+            <span class="wx-dn">${i === 0 ? 'Auj.' : esc(new Date(x.date + 'T12:00').toLocaleDateString('fr-FR', { weekday: 'short' }))}</span>
+            ${wxIcon(x.kind, true, 24)}
+            <span class="wx-mn">${Math.round(x.min)}°C</span>
+            <span class="wx-track"><span class="wx-range" style="left:${left}%;width:${width}%;background:linear-gradient(90deg, ${tempColor(x.min)}, ${tempColor(x.max)})"></span>${mark}</span>
+            <span class="wx-mx">${Math.round(x.max)}°C</span>
+          </div>`;
+        }).join('')}</div>`;
+      }
+      return head + hourly + daily;
     }
   }
 };

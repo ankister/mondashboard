@@ -1,6 +1,6 @@
 # Mon dashboard
 
-Dashboard homelab modulaire et auto-hébergé : supervision des machines (CPU, RAM, réseau, GPU, SMART, mises à jour), conteneurs Docker de toutes les machines, activité Plex et Jellyfin, torrents qBittorrent (avec ajout), calendriers CalDAV (Nextcloud, Infomaniak) et Home Assistant, météo, flux FreshRSS et favoris avec statut en ligne / hors ligne.
+Dashboard modulaire et auto-hébergé : supervision des machines (CPU, RAM, réseau, GPU, SMART, mises à jour), conteneurs Docker de toutes les machines, activité Plex et Jellyfin, torrents qBittorrent (avec ajout), calendriers CalDAV (Nextcloud, Infomaniak) et Home Assistant, météo, flux FreshRSS et favoris avec statut en ligne / hors ligne.
 
 Tout se configure depuis l'interface : onglets, widgets (glisser-déposer, largeur), intégrations et favoris. Aucun fichier YAML à éditer.
 
