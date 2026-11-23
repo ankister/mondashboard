@@ -42,8 +42,9 @@ DEMO=1 npm start
 | Ajouter, renommer ou supprimer un onglet | **✎ Modifier**, puis « ＋ Onglet », ou le ✎ sur l'onglet actif |
 | Réordonner les onglets | Mode Modifier : glisser un onglet sur un autre |
 | Ajouter un widget | Mode Modifier : « ＋ Ajouter un widget » |
-| Déplacer un widget | Glisser la poignée ⠿ sur un autre widget, **ou sur un autre onglet** pour l'y transférer |
-| Largeur d'un widget | Sélecteur 3/12 à 12/12 dans l'en-tête du widget |
+| Déplacer un widget | Mode Modifier : glisser la poignée ⠿ n'importe où dans la grille (les blocs se réorganisent automatiquement). Pour l'envoyer dans un autre onglet : ⚙ → Onglet |
+| Taille d'un widget | Mode Modifier : tirer un bord ou un coin du bloc, ou utiliser les sélecteurs de largeur (2/12 à 12/12) et de hauteur. « Auto » = hauteur adaptée au contenu |
+| Calendrier | Boutons « Liste » / « Mois » en haut du widget ; en vue mensuelle, ▲ ▼ changent de mois, ● revient à aujourd'hui, un clic sur un jour affiche ses événements |
 | Notes Markdown | Widget « Notes (Markdown) » : ✎ pour écrire (Ctrl+S enregistre, Échap annule), onglet Aperçu ; les cases `- [ ]` se cochent directement dans la note |
 | Hauteur d'un widget | Mode Modifier : sélecteur (Auto, 150 à 800 px) ou tirer la barre en bas du widget ; valeur libre dans ⚙. Le contenu défile si la hauteur est fixée. |
 | Démarrer / arrêter / redémarrer un conteneur | Widget Docker, boutons ▶ ■ ↻ (admin connecté, source « Agent Mon dashboard » avec actions autorisées) |

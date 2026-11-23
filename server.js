@@ -72,6 +72,7 @@ function cleanPages(pages) {
       return {
         id: w.id || id(), type: w.type, title: String(w.title ?? WIDGETS[w.type].label).slice(0, 60),
         w: Math.min(12, Math.max(2, Number(w.w) || WIDGETS[w.type].w)),
+        ...(Number.isInteger(w.x) && Number.isInteger(w.y) ? { x: Math.min(11, Math.max(0, w.x)), y: Math.max(0, w.y) } : {}),
         h: Math.min(3000, Math.max(0, Math.round(Number(w.h) || 0))),
         refresh: Math.max(3, Number(w.refresh) || WIDGETS[w.type].refresh),
         integrations: (w.integrations || []).filter(x => ints.has(x)),
@@ -235,13 +236,20 @@ async function widgetData(w) {
 }
 
 app.get('/api/widgets/:pageId/:widgetId', requireView, wrap(async req => {
-  const w = findWidget(req.params.pageId, req.params.widgetId);
-  if (!w) throw bad('Widget introuvable', 404);
+  const found = findWidget(req.params.pageId, req.params.widgetId);
+  if (!found) throw bad('Widget introuvable', 404);
+  let w = found, key = found.id;
+  // plage de dates explicite (vue mensuelle du calendrier), limitée à 70 jours
+  const from = Date.parse(req.query.from || ''), to = Date.parse(req.query.to || '');
+  if (found.type === 'calendar' && from && to && to > from && to - from <= 70 * 864e5) {
+    w = { ...found, config: { ...(found.config || {}), _from: new Date(from).toISOString(), _to: new Date(to).toISOString() } };
+    key = `${found.id}|${from}|${to}`;
+  }
   const ttl = Math.max(2000, w.refresh * 1000 * 0.8);
-  const c = cache.get(w.id);
+  const c = cache.get(key);
   if (c && Date.now() - c.at < ttl) return c.data;
   const data = await widgetData(w);
-  cache.set(w.id, { at: Date.now(), data });
+  cache.set(key, { at: Date.now(), data });
   return data;
 }));
 
@@ -274,6 +282,7 @@ app.post('/api/widgets/:pageId/:widgetId/action', requireAdmin, wrap(async req =
 agentRoutes(app, { requireAdmin, wrap, bad });
 
 // ---------- Frontend ----------
+app.use('/vendor/gridstack', express.static(path.resolve('node_modules/gridstack/dist'), { maxAge: '7d' }));
 app.use(express.static(path.resolve('public'), { index: 'index.html', maxAge: '1h' }));
 app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.resolve('public/index.html')));
 

@@ -174,30 +174,39 @@ function renderApp() {
         </button>`).join('')}
       ${S.edit ? '<button class="tab tab-add" data-act="add-tab">＋ Onglet</button>' : ''}
     </nav>
-    <main class="grid" id="grid">
-      ${p ? p.widgets.map(widgetShell).join('') : '<div class="empty" style="grid-column:span 12">Aucun onglet. Passe en mode « Modifier » pour en créer un.</div>'}
+    <main>
+      ${p ? `<div class="grid-stack" id="grid">${p.widgets.map(widgetShell).join('')}</div>` : '<div class="empty">Aucun onglet. Passe en mode « Modifier » pour en créer un.</div>'}
       ${S.edit && p ? '<button class="add-widget" data-act="add-widget">＋ Ajouter un widget</button>' : ''}
-      ${!S.edit && p && !p.widgets.length ? `<div class="empty" style="grid-column:span 12">Onglet vide.${canEdit() ? ' Clique sur « Modifier » pour ajouter des widgets.' : ''}</div>` : ''}
+      ${!S.edit && p && !p.widgets.length ? `<div class="empty">Onglet vide.${canEdit() ? ' Clique sur « Modifier » pour ajouter des widgets.' : ''}</div>` : ''}
     </main>
   </div>`;
   bindApp();
-  if (p) p.widgets.forEach(startWidget);
+  if (p) { initGrid(p); p.widgets.forEach(startWidget); }
   S.timers.push(setInterval(() => { const c = $('#clock'); if (c) c.textContent = dateLine(); }, 20000));
 }
 
-const WIDTHS = [3, 4, 6, 8, 12];
+const WIDTHS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const HEIGHTS = [0, 150, 250, 350, 450, 600, 800];
 const heightOptions = h => {
   const list = HEIGHTS.includes(h) ? HEIGHTS : [...HEIGHTS, h].sort((a, b) => a - b);
   return list.map(n => `<option value="${n}" ${n === h ? 'selected' : ''}>${n ? n + ' px' : 'Auto'}</option>`).join('');
 };
+// Grille libre (gridstack) : 12 colonnes, lignes de 10 px, marge de 9 px autour de chaque bloc
+const CELL = 10, GAP = 9;
+const rowsFor = px => Math.max(6, Math.round((px + 2 * GAP) / CELL));
+const pxFor = rows => rows * CELL - 2 * GAP;
+let GRID = null;
+
 function widgetShell(w) {
   const r = RENDER[w.type] || {};
   const h = Number(w.h) || 0;
+  const pos = Number.isInteger(w.x) && Number.isInteger(w.y) ? `gs-x="${w.x}" gs-y="${w.y}"` : 'gs-auto-position="true"';
   return `
-  <section class="widget ${w.type === 'bookmarks' ? 'bare' : ''} ${w.w <= 3 ? 'half-ok' : ''} ${h ? 'fixed-h' : ''}" data-wid="${w.id}" style="grid-column: span ${w.w};${h ? ` height:${h}px` : ''}">
+  <div class="grid-stack-item" gs-id="${w.id}" gs-min-w="2" gs-min-h="6" gs-w="${w.w}" gs-h="${h ? rowsFor(h) : 12}" ${pos} ${h ? '' : 'gs-size-to-content="true"'}>
+  <div class="grid-stack-item-content">
+  <section class="widget ${w.type === 'bookmarks' ? 'bare' : ''} ${h ? 'fixed-h' : ''}" data-wid="${w.id}">
     <div class="w-head">
-      ${S.edit ? '<span class="iconbtn handle" draggable="true" title="Glisser pour déplacer">⠿</span>' : ''}
+      ${S.edit ? '<span class="iconbtn handle" title="Glisser pour déplacer">⠿</span>' : ''}
       <div class="w-title">${esc(w.title)}</div>
       <div class="w-tools">
         <select data-act="width" title="Largeur">${WIDTHS.map(n => `<option value="${n}" ${n === w.w ? 'selected' : ''}>${n}/12</option>`).join('')}</select>
@@ -210,8 +219,68 @@ function widgetShell(w) {
       ${r.static ? `<div class="w-static">${r.static(w)}</div>` : ''}
       <div class="w-dyn">${r.static && w.type === 'bookmarks' ? '' : '<div class="skeleton"></div>'}</div>
     </div>
-    ${S.edit ? '<div class="rz" title="Glisser pour changer la hauteur"></div>' : ''}
-  </section>`;
+  </section>
+  </div></div>`;
+}
+
+function initGrid(p) {
+  if (GRID) { try { GRID.destroy(false); } catch { /* déjà détruite */ } GRID = null; }
+  const el = $('#grid');
+  if (!el || !window.GridStack) return;
+  GRID = GridStack.init({
+    column: 12, cellHeight: CELL, margin: GAP, mode: 'top', animate: true,
+    handle: '.handle', staticGrid: !S.edit,
+    resizable: { handles: 'e,se,s,sw,w' },
+    columnOpts: { breakpoints: [{ w: 760, c: 1 }], layout: 'list' }
+  }, el);
+  // ajuste les blocs « Auto » à leur contenu une fois affichés
+  setTimeout(() => $$('.grid-stack-item[gs-size-to-content]', el).forEach(i => GRID?.resizeToContent(i)), 50);
+  let userResized = new Set();
+  // dès qu'on attrape un coin, le bloc quitte le mode « Auto » pour garder la hauteur choisie
+  GRID.on('resizestart', (_e, item) => {
+    if (item.hasAttribute('gs-size-to-content')) {
+      item.removeAttribute('gs-size-to-content');
+      GRID.update(item, { sizeToContent: false });
+      $('.widget', item)?.classList.add('fixed-h');
+    }
+  });
+  GRID.on('resizestop', (_e, item) => userResized.add(item.getAttribute('gs-id')));
+  GRID.on('change', (_e, nodes) => {
+    if (!S.edit) return;
+    let dirty = false;
+    for (const n of nodes) {
+      const w = p.widgets.find(x => x.id === n.id);
+      if (!w) continue;
+      if (w.x !== n.x || w.y !== n.y || w.w !== n.w) {
+        w.x = n.x; w.y = n.y; w.w = n.w; dirty = true;
+        const ws = $('select[data-act=width]', n.el);
+        if (ws) ws.value = String(n.w);
+      }
+      if (userResized.has(n.id)) {
+        // hauteur choisie à la main : le bloc devient de hauteur fixe
+        w.h = pxFor(n.h);
+        n.el.removeAttribute('gs-size-to-content');
+        GRID.update(n.el, { sizeToContent: false });
+        $('.widget', n.el)?.classList.add('fixed-h');
+        const sel = $('select[data-act=height]', n.el);
+        if (sel) sel.innerHTML = heightOptions(w.h);
+        dirty = true;
+      }
+    }
+    // fige aussi la position des blocs placés automatiquement, pour une disposition stable
+    for (const n of GRID.engine.nodes) {
+      const w = p.widgets.find(x => x.id === n.id);
+      if (w && (w.x !== n.x || w.y !== n.y)) { w.x = n.x; w.y = n.y; dirty = true; }
+    }
+    userResized = new Set();
+    if (dirty) savePages(false);
+  });
+}
+
+// après chaque rafraîchissement, un bloc « Auto » reprend la hauteur de son contenu
+function fitWidget(id) {
+  const item = $(`.grid-stack-item[gs-id="${id}"]`);
+  if (GRID && item && item.hasAttribute('gs-size-to-content')) GRID.resizeToContent(item);
 }
 
 function stopTimers() { S.timers.forEach(clearInterval); S.timers = []; }
@@ -230,12 +299,14 @@ async function loadWidget(w) {
   if (!el) return;
   const dyn = $('.w-dyn', el);
   try {
-    const data = await api(`/widgets/${page().id}/${w.id}`);
+    const q = RENDER[w.type]?.query?.(w) || '';
+    const data = await api(`/widgets/${page().id}/${w.id}${q}`);
     S.cache[w.id] = data;
     paintWidget(w, data);
   } catch (e) {
     if (e.status === 401) { boot(); return; }
     dyn.innerHTML = `<div class="w-err">⚠ ${esc(e.message)}</div>`;
+    fitWidget(w.id);
   }
 }
 
@@ -245,10 +316,12 @@ function paintWidget(w, data) {
   const dyn = $('.w-dyn', el);
   if (data.empty) {
     dyn.innerHTML = `<div class="empty">Aucune intégration liée.${canEdit() ? ' Configure ce widget (⚙ en mode Modifier).' : ''}</div>`;
+    fitWidget(w.id);
     return;
   }
   const html = RENDER[w.type].dyn(data, w, el);
   if (html !== undefined) dyn.innerHTML = html + errorsHtml(data.errors);
+  fitWidget(w.id);
 }
 const errorsHtml = errs => (errs?.length ? errs.map(e => `<div class="w-warn">⚠ ${esc(e.name)} : ${esc(e.error)}</div>`).join('') : '');
 
@@ -257,6 +330,92 @@ const bar = (label, value, text) => `
   <div class="bar-row"><span class="lbl">${esc(label)}</span>
   <div class="bar"><i class="${level(value)}" style="width:${Math.min(100, Math.max(0, value || 0))}%"></i></div>
   <span class="val">${esc(text ?? pct(value))}</span></div>`;
+
+// ---------- calendrier : utilitaires ----------
+const calKey = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const evDate = (s, allDay) => (allDay && s.length === 10 ? new Date(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)) : new Date(s));
+function monthRange(month) {
+  const first = new Date(month.getFullYear(), month.getMonth(), 1);
+  const from = new Date(first); from.setDate(1 - ((first.getDay() + 6) % 7)); // lundi de la 1re semaine
+  const to = new Date(from); to.setDate(from.getDate() + 42);
+  return { from, to };
+}
+// jours (clés AAAA-MM-JJ) couverts par un événement
+function evDays(e) {
+  const s = evDate(e.start, e.allDay);
+  let end = evDate(e.end || e.start, e.allDay);
+  if (e.allDay) end = new Date(end.getFullYear(), end.getMonth(), end.getDate() - 1); // fin exclusive
+  else if (+end > +s) end = new Date(+end - 1);
+  const out = [];
+  const d = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+  for (let i = 0; i < 62 && d <= end; i++) { out.push(calKey(d)); d.setDate(d.getDate() + 1); }
+  return out.length ? out : [calKey(s)];
+}
+const evLine = e => {
+  const s = evDate(e.start, e.allDay);
+  return `<div class="ev" style="border-color:${esc(e.color || 'var(--accent)')}">
+    <span class="h">${e.allDay ? 'Journée' : s.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</span>
+    <span><b style="font-weight:500">${esc(e.title)}</b>${e.location ? `<span class="muted small"> · ${esc(e.location)}</span>` : ''}
+    <div class="muted small">${esc(e.calendar || '')}</div></span>
+  </div>`;
+};
+function calList(evs) {
+  if (!evs.length) return '<div class="empty">Rien de prévu 🎉</div>';
+  const today = new Date(), todayKey = calKey(today), tomorrowKey = calKey(new Date(Date.now() + 864e5));
+  const groups = new Map();
+  for (const e of evs) {
+    const s = evDate(e.start, e.allDay);
+    if (!e.allDay && new Date(e.end) < today) continue;
+    const k = e.allDay && s < today ? todayKey : calKey(s);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(e);
+  }
+  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([k, items]) => {
+    const d = evDate(k, true);
+    const lbl = k === todayKey ? 'Aujourd\'hui' : k === tomorrowKey ? 'Demain'
+      : d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'short' });
+    return `<div class="day"><div class="day-lbl">${esc(lbl)}</div>${items.map(evLine).join('')}</div>`;
+  }).join('') || '<div class="empty">Rien de prévu 🎉</div>';
+}
+function calMonth(evs, st) {
+  const byDay = new Map();
+  for (const e of evs) for (const k of evDays(e)) {
+    if (!byDay.has(k)) byDay.set(k, []);
+    byDay.get(k).push(e);
+  }
+  const { from } = monthRange(st.month);
+  const todayKey = calKey(new Date());
+  const title = st.month.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(from); d.setDate(from.getDate() + i);
+    const k = calKey(d), list = byDay.get(k) || [];
+    const colors = [...new Set(list.map(e => e.color || 'var(--accent)'))].slice(0, 3);
+    cells.push(`<button type="button" class="cal-day${d.getMonth() !== st.month.getMonth() ? ' out' : ''}${k === todayKey ? ' today' : ''}${k === st.sel ? ' sel' : ''}" data-day="${k}" title="${list.length ? esc(list.map(e => e.title).join(' · ')) : ''}">
+      <span class="n">${d.getDate()}</span>
+      <span class="dots">${colors.map(c => `<i style="background:${esc(c)}"></i>`).join('')}</span>
+    </button>`);
+  }
+  const selDate = evDate(st.sel, true);
+  const selList = (byDay.get(st.sel) || []).slice().sort((a, b) => (b.allDay - a.allDay) || a.start.localeCompare(b.start));
+  return `
+    <div class="cal-head">
+      <span class="cal-title">${esc(title)}</span>
+      <span>
+        <button type="button" class="iconbtn" data-cnav="today" title="Aujourd'hui">●</button>
+        <button type="button" class="iconbtn" data-cnav="prev" title="Mois précédent">▲</button>
+        <button type="button" class="iconbtn" data-cnav="next" title="Mois suivant">▼</button>
+      </span>
+    </div>
+    <div class="cal-grid">
+      ${['lu', 'ma', 'me', 'je', 've', 'sa', 'di'].map(j => `<span class="cal-wd">${j}</span>`).join('')}
+      ${cells.join('')}
+    </div>
+    <div class="cal-sel">
+      <div class="day-lbl">${esc(selDate.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }))}</div>
+      ${selList.length ? selList.map(evLine).join('') : '<div class="muted small">Aucun événement</div>'}
+    </div>`;
+}
 
 const RENDER = {
   bookmarks: {
@@ -471,30 +630,63 @@ const RENDER = {
   },
 
   calendar: {
-    dyn(d) {
-      const evs = d.events || [];
-      if (!evs.length) return '<div class="empty">Rien de prévu 🎉</div>';
-      const toDate = (s, allDay) => (allDay && s.length === 10 ? new Date(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)) : new Date(s));
-      const key = dt => dt.toDateString();
-      const today = new Date(), tomorrow = new Date(Date.now() + 864e5);
-      const groups = new Map();
-      for (const e of evs) {
-        const s = toDate(e.start, e.allDay);
-        if (s < new Date(today.toDateString()) && !e.allDay && new Date(e.end) < today) continue;
-        const k = key(s < today && e.allDay ? today : s);
-        if (!groups.has(k)) groups.set(k, { date: s, items: [] });
-        groups.get(k).items.push({ ...e, s });
+    // état par widget : vue (liste / mois), mois affiché, jour sélectionné
+    state(w) {
+      if (!S.cal) S.cal = {};
+      if (!S.cal[w.id]) {
+        const now = new Date();
+        S.cal[w.id] = {
+          view: localStorageGet(`cal_view_${w.id}`) || (w.config?.view === 'mois' ? 'month' : 'list'),
+          month: new Date(now.getFullYear(), now.getMonth(), 1),
+          sel: calKey(now)
+        };
       }
-      return [...groups.values()].map(g => {
-        const lbl = key(g.date) === key(today) ? 'Aujourd\'hui' : key(g.date) === key(tomorrow) ? 'Demain'
-          : g.date.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'short' });
-        return `<div class="day"><div class="day-lbl">${esc(lbl)}</div>${g.items.map(e => `
-          <div class="ev" style="border-color:${esc(e.color || 'var(--accent)')}">
-            <span class="h">${e.allDay ? 'Journée' : e.s.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</span>
-            <span><b style="font-weight:500">${esc(e.title)}</b>${e.location ? `<span class="muted small"> · ${esc(e.location)}</span>` : ''}
-            <div class="muted small">${esc(e.calendar || '')}</div></span>
-          </div>`).join('')}</div>`;
-      }).join('');
+      return S.cal[w.id];
+    },
+    query(w) {
+      const st = RENDER.calendar.state(w);
+      if (st.view !== 'month') return '';
+      const { from, to } = monthRange(st.month);
+      return `?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`;
+    },
+    static: w => `<div class="cal-switch" role="tablist">
+        <button type="button" class="btn sm" data-cv="list">Liste</button>
+        <button type="button" class="btn sm" data-cv="month">Mois</button>
+      </div>`,
+    bind(w, el) {
+      const st = RENDER.calendar.state(w);
+      const sync = () => $$('[data-cv]', el).forEach(b => b.classList.toggle('on', b.dataset.cv === st.view));
+      sync();
+      el.addEventListener('click', e => {
+        const v = e.target.closest('[data-cv]');
+        if (v && v.dataset.cv !== st.view) {
+          st.view = v.dataset.cv;
+          localStorageSet(`cal_view_${w.id}`, st.view);
+          sync();
+          $('.w-dyn', el).innerHTML = '<div class="skeleton"></div>';
+          loadWidget(w);
+          return;
+        }
+        const nav = e.target.closest('[data-cnav]');
+        if (nav) {
+          const n = nav.dataset.cnav;
+          const now = new Date();
+          st.month = n === 'today' ? new Date(now.getFullYear(), now.getMonth(), 1)
+            : new Date(st.month.getFullYear(), st.month.getMonth() + (n === 'next' ? 1 : -1), 1);
+          if (n === 'today') st.sel = calKey(now);
+          loadWidget(w);
+          return;
+        }
+        const day = e.target.closest('[data-day]');
+        if (day) {
+          st.sel = day.dataset.day;
+          if (S.cache[w.id]) paintWidget(w, S.cache[w.id]);
+        }
+      });
+    },
+    dyn(d, w) {
+      const st = RENDER.calendar.state(w);
+      return st.view === 'month' ? calMonth(d.events || [], st) : calList(d.events || []);
     }
   },
 
@@ -631,73 +823,17 @@ function bindApp() {
     else w.h = Number(e.target.value);
     savePages();
   });
-  if (S.edit) { bindDrag(); bindResize(); }
+  if (S.edit) bindTabDrag();
 }
 
-// Redimensionnement vertical : poignée en bas du widget (mode Modifier)
-function bindResize() {
-  $('#grid').addEventListener('pointerdown', e => {
-    const grip = e.target.closest('.rz');
-    if (!grip) return;
-    e.preventDefault();
-    const el = grip.closest('.widget');
-    const y0 = e.clientY, h0 = el.getBoundingClientRect().height;
-    el.classList.add('resizing');
-    grip.setPointerCapture(e.pointerId);
-    const move = ev => { el.style.height = `${Math.max(80, Math.round((h0 + ev.clientY - y0) / 10) * 10)}px`; };
-    const up = () => {
-      grip.removeEventListener('pointermove', move);
-      grip.removeEventListener('pointerup', up);
-      el.classList.remove('resizing');
-      const h = Math.round(el.getBoundingClientRect().height / 10) * 10;
-      if (Math.abs(h - h0) < 5) return;
-      page().widgets.find(x => x.id === el.dataset.wid).h = h;
-      savePages();
-    };
-    grip.addEventListener('pointermove', move);
-    grip.addEventListener('pointerup', up);
-  });
-}
-
-// Glisser-déposer : réordonner les widgets, les déplacer vers un autre onglet, réordonner les onglets
-function bindDrag() {
-  let drag = null; // { kind: 'widget'|'tab', id }
-  $('#grid').addEventListener('dragstart', e => {
-    const h = e.target.closest('.handle');
-    if (!h) return;
-    const el = h.closest('.widget');
-    drag = { kind: 'widget', id: el.dataset.wid };
-    el.classList.add('dragging');
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', drag.id);
-    e.dataTransfer.setDragImage(el, 20, 20);
-  });
+// Glisser-déposer des onglets pour les réordonner
+function bindTabDrag() {
+  let drag = null;
   $('#tabs').addEventListener('dragstart', e => {
     const t = e.target.closest('.tab[data-tab]');
-    if (t) { drag = { kind: 'tab', id: t.dataset.tab }; e.dataTransfer.setData('text/plain', drag.id); }
+    if (t) { drag = t.dataset.tab; e.dataTransfer.setData('text/plain', drag); }
   });
-  document.addEventListener('dragend', () => {
-    drag = null;
-    $$('.dragging, .drop-before, .drop-target').forEach(x => x.classList.remove('dragging', 'drop-before', 'drop-target'));
-  }, { once: false });
-  $('#grid').addEventListener('dragover', e => {
-    if (drag?.kind !== 'widget') return;
-    e.preventDefault();
-    $$('.drop-before').forEach(x => x.classList.remove('drop-before'));
-    const target = e.target.closest('.widget');
-    if (target && target.dataset.wid !== drag.id) target.classList.add('drop-before');
-  });
-  $('#grid').addEventListener('drop', e => {
-    if (drag?.kind !== 'widget') return;
-    e.preventDefault();
-    const target = e.target.closest('.widget, .add-widget');
-    const ws = page().widgets;
-    const from = ws.findIndex(x => x.id === drag.id);
-    const [moved] = ws.splice(from, 1);
-    const to = target?.dataset.wid ? ws.findIndex(x => x.id === target.dataset.wid) : ws.length;
-    ws.splice(to, 0, moved);
-    savePages();
-  });
+  $('#tabs').addEventListener('dragend', () => { drag = null; $$('.drop-target').forEach(x => x.classList.remove('drop-target')); });
   $('#tabs').addEventListener('dragover', e => {
     const t = e.target.closest('.tab[data-tab]');
     if (!drag || !t) return;
@@ -707,26 +843,26 @@ function bindDrag() {
   });
   $('#tabs').addEventListener('drop', e => {
     const t = e.target.closest('.tab[data-tab]');
-    if (!drag || !t) return;
+    if (!drag || !t || drag === t.dataset.tab) return;
     e.preventDefault();
     const pages = S.dash.pages;
-    if (drag.kind === 'widget' && t.dataset.tab !== page().id) {
-      const src = page();
-      const w = src.widgets.find(x => x.id === drag.id);
-      src.widgets = src.widgets.filter(x => x.id !== drag.id);
-      pages.find(p => p.id === t.dataset.tab).widgets.push(w);
-      toast(`Widget déplacé vers « ${pages.find(p => p.id === t.dataset.tab).name} »`);
-      savePages();
-    } else if (drag.kind === 'tab' && drag.id !== t.dataset.tab) {
-      const from = pages.findIndex(p => p.id === drag.id);
-      const [m] = pages.splice(from, 1);
-      pages.splice(pages.findIndex(p => p.id === t.dataset.tab), 0, m);
-      savePages();
-    }
+    const [m] = pages.splice(pages.findIndex(p => p.id === drag), 1);
+    pages.splice(pages.findIndex(p => p.id === t.dataset.tab), 0, m);
+    savePages();
   });
 }
 
-async function savePages() {
+// rerender=false : sauvegarde silencieuse (déplacement / redimensionnement dans la grille)
+let saveTimer = null;
+async function savePages(rerender = true) {
+  if (!rerender) {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(async () => {
+      try { await api('/pages', { method: 'PUT', body: { pages: S.dash.pages } }); }
+      catch (e) { toast(e.message, true); }
+    }, 400);
+    return;
+  }
   try {
     const r = await api('/pages', { method: 'PUT', body: { pages: S.dash.pages } });
     S.dash.pages = r.pages;
@@ -834,7 +970,7 @@ function widgetForm(orig) {
       </div>
       <div class="row2">
         <label>Hauteur en px (0 = automatique)<input type="number" name="h" min="0" step="10" value="${Number(w.h) || 0}"></label>
-        <div></div>
+        ${orig.id ? `<label>Onglet<select name="tab">${S.dash.pages.map(pg => `<option value="${pg.id}" ${pg.id === page().id ? 'selected' : ''}>${esc(pg.icon || '')} ${esc(pg.name)}</option>`).join('')}</select></label>` : '<div></div>'}
       </div>
       ${intField}
       ${(d.options || []).map(o => optionField(o, w.config?.[o.key])).join('')}
@@ -935,7 +1071,14 @@ function widgetForm(orig) {
     }
     if (w.type === 'bookmarks') w.config.categories = cats.map(c => ({ ...c, links: c.links.filter(l => l.url) }));
     const ws = page().widgets;
-    if (orig.id) ws[ws.findIndex(x => x.id === orig.id)] = w;
+    const dest = fd.get('tab');
+    if (orig.id && dest && dest !== page().id) {
+      // déplacement vers un autre onglet : placé automatiquement dans la grille de destination
+      ws.splice(ws.findIndex(x => x.id === orig.id), 1);
+      delete w.x; delete w.y;
+      S.dash.pages.find(pg => pg.id === dest).widgets.push(w);
+      toast(`Widget déplacé vers « ${S.dash.pages.find(pg => pg.id === dest).name} »`);
+    } else if (orig.id) ws[ws.findIndex(x => x.id === orig.id)] = w;
     else ws.push({ ...w, id: uid() });
     m.close();
     savePages();
