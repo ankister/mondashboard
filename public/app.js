@@ -1073,6 +1073,47 @@ const RENDER = {
       const cfg = w.config || {};
       const c = d.current;
       const now = new Date();
+      const layout = cfg.layout || 'Complète';
+      const dayName = (x, i) => i === 0 ? 'Auj.' : esc(new Date(x.date + 'T12:00').toLocaleDateString('fr-FR', { weekday: 'short' }));
+      const clockTxt = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+      const sub = `ressenti ${Math.round(c.feels)}° · 💧 ${c.humidity} % · 💨 ${Math.round(c.wind)} km/h`;
+      const today = d.days?.[0];
+      const minmax = today ? `<span class="wx-mm"><b style="color:${tempColor(today.max)}">↑ ${Math.round(today.max)}°</b> <span style="color:${tempColor(today.min)}">↓ ${Math.round(today.min)}°</span>${today.rain ? ` · 💧 ${today.rain} %` : ''}</span>` : '';
+      const dayCols = n => `<div class="wx-cols">${(d.days || []).slice(0, n).map((x, i) => `
+        <div class="wx-col" title="${esc(x.label)}${x.rain != null ? ` · pluie ${x.rain} %` : ''}">
+          <span class="wx-ht">${dayName(x, i)}</span>${wxIcon(x.kind, true, 26)}
+          <span><b>${Math.round(x.max)}°</b> <span class="muted">${Math.round(x.min)}°</span></span>
+        </div>`).join('')}</div>`;
+      const hourChips = () => `<div class="wx-hours wx-hours-s">${(d.hours || []).map(h => `
+        <div class="wx-h" title="${esc(h.label)}${h.rain != null ? ` · pluie ${h.rain} %` : ''}">
+          <span class="wx-ht">${esc(h.time.slice(0, 2))}h</span>${wxIcon(h.kind, h.day, 22)}<b>${Math.round(h.temp)}°</b>
+          ${h.rain ? `<span class="wx-hr">${h.rain}%</span>` : '<span class="wx-hr"></span>'}
+        </div>`).join('')}</div>`;
+
+      if (layout === 'Mini') {
+        return `<div class="wx-mini">${wxIcon(c.kind, c.day, 46)}
+          <div class="wx-mini-t"><span class="wx-mini-deg">${Math.round(c.temp)}°</span>
+          <div class="wx-mini-txt"><span>${esc(c.label)}</span>${minmax}</div></div>
+          ${cfg.showClock !== false ? `<span class="wx-clock wx-clock-s">${clockTxt}</span>` : ''}</div>`;
+      }
+      if (layout === 'Bandeau') {
+        return `<div class="wx-band">
+          <div class="wx-band-now">${wxIcon(c.kind, c.day, 46)}
+            <div><div class="wx-mini-deg">${Math.round(c.temp)}°</div><div class="small muted">${esc(c.label)}</div></div></div>
+          ${cfg.showDaily !== false ? dayCols(Math.min(7, cfg.days || 5)) : cfg.showHourly !== false ? hourChips() : ''}
+        </div>`;
+      }
+      if (layout === 'Compacte') {
+        return `<div class="wx-cmp">
+          <div class="wx-cmp-head">${wxIcon(c.kind, c.day, 52)}
+            <div class="wx-cmp-main"><div><span class="wx-mini-deg">${Math.round(c.temp)}°</span> <span>${esc(c.label)}</span></div>
+              <div class="wx-sub">${esc(d.city || '')}${d.city ? ' · ' : ''}${sub}</div></div>
+            ${cfg.showClock !== false ? `<div class="wx-cmp-clock"><span class="wx-clock wx-clock-s">${clockTxt}</span><span class="small muted">${esc(now.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' }))}</span></div>` : ''}
+          </div>
+          ${cfg.showHourly !== false && d.hours?.length ? hourChips() : ''}
+          ${cfg.showDaily !== false && d.days?.length ? dayCols(cfg.days || 5) : ''}
+        </div>`;
+      }
       const head = `
         <div class="wx-top">
           <div class="wx-big">${wxIcon(c.kind, c.day)}</div>

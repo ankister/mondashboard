@@ -395,3 +395,24 @@ details.store summary { color: var(--muted); }
   .form .row2 .row2 { grid-template-columns: 1fr 1fr; }
   .form input, .form select, .form textarea { min-width: 0; max-width: 100%; }
 }
+
+/* ---------- Météo : présentations compactes ---------- */
+.wx-mini-deg { font-size: 34px; font-weight: 300; line-height: 1; }
+.wx-clock.wx-clock-s { font-size: 22px; font-weight: 300; line-height: 1.1; }
+.wx-mm { font-size: 12.5px; }
+.wx-mini { display: flex; align-items: center; gap: 12px; }
+.wx-mini-t { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.wx-mini-txt { display: flex; flex-direction: column; font-size: 13px; min-width: 0; }
+.wx-mini-txt > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wx-cols { display: flex; justify-content: space-between; gap: 4px; flex: 1; min-width: 0; }
+.wx-col { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 13px; flex: 1; min-width: 0; }
+.wx-hours-s .wx-h { flex: 0 0 44px; gap: 2px; font-size: 13px; }
+.wx-band { display: flex; align-items: center; gap: 18px; }
+.wx-band-now { display: flex; align-items: center; gap: 10px; flex: none; padding-right: 16px; border-right: 1px solid var(--line); }
+.wx-cmp { display: flex; flex-direction: column; gap: 12px; }
+.wx-cmp-head { display: flex; align-items: center; gap: 12px; }
+.wx-cmp-main { flex: 1; min-width: 0; }
+.wx-cmp-main .wx-sub { margin-top: 4px; text-align: left; }
+.wx-cmp-clock { display: flex; flex-direction: column; align-items: flex-end; flex: none; }
+.wx-cmp .wx-hours { margin: 0; padding: 8px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+@media (max-width: 759px) { .wx-band { flex-direction: column; align-items: stretch; gap: 10px; } .wx-band-now { border-right: 0; padding-right: 0; } }
