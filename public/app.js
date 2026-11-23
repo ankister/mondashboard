@@ -254,6 +254,7 @@ function widgetShell(w) {
   </div></div>`;
 }
 
+let RO = null;
 function initGrid(p) {
   if (GRID) { try { GRID.destroy(false); } catch { /* déjà détruite */ } GRID = null; }
   const el = $('#grid');
@@ -266,6 +267,18 @@ function initGrid(p) {
   }, el);
   // ajuste les blocs « Auto » à leur contenu une fois affichés
   setTimeout(() => $$('.grid-stack-item[gs-size-to-content]', el).forEach(i => GRID?.resizeToContent(i)), 50);
+  // un bloc « Auto » suit son contenu quand celui-ci change de taille
+  // (volet déplié, image chargée, liste rallongée…) au lieu d'être recouvert par le bloc du dessous
+  RO?.disconnect();
+  const pending = new Set();
+  RO = new ResizeObserver(entries => {
+    for (const en of entries) { const it = en.target.closest('.grid-stack-item'); if (it) pending.add(it); }
+    requestAnimationFrame(() => {
+      for (const it of pending) if (GRID && it.isConnected && it.hasAttribute('gs-size-to-content')) GRID.resizeToContent(it);
+      pending.clear();
+    });
+  });
+  $$('.grid-stack-item .w-body', el).forEach(b => RO.observe(b));
   let userResized = new Set();
   // dès qu'on attrape un coin, le bloc quitte le mode « Auto » pour garder la hauteur choisie
   GRID.on('resizestart', (_e, item) => {
