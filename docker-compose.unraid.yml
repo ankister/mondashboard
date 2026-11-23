@@ -6,11 +6,12 @@ services:
     image: homedash:local
     container_name: homedash
     restart: unless-stopped
-    user: "99:100"            # nobody:users, propriétaire habituel de appdata sur Unraid
     ports:
       - "3080:3080"
     environment:
       - TZ=Europe/Paris
+      - PUID=99                 # nobody:users, propriétaire habituel de appdata sur Unraid
+      - PGID=100
       # - SECRET_KEY=une-longue-phrase-secrete   # sinon une clé est générée dans /data/.secret_key
     volumes:
       - /mnt/user/appdata/homedash:/data

@@ -127,6 +127,10 @@ Données dans `/mnt/user/appdata/homedash`. Expose-le via NPM en HTTPS si tu veu
 
 `docker-compose.example.yml` déploie Mon dashboard **et** l'agent de la même machine sans rien copier : Docker construit les images depuis ce dépôt. Les étapes sont détaillées en tête du fichier.
 
+### Droits sur le dossier de données
+
+Le conteneur démarre en root uniquement le temps d'attribuer le dossier `/data` à l'utilisateur `PUID:PGID` (1000:1000 par défaut), puis lance l'application sans privilèges. Sur Unraid, mets `PUID=99` et `PGID=100`. N'utilise pas l'option `user:` du compose, sinon cette correction automatique ne peut pas se faire.
+
 ## 5. Sécurité
 
 - Mot de passe admin haché (scrypt), session par cookie HttpOnly / SameSite=Strict, blocage de 5 minutes après 5 échecs.
