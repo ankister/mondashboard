@@ -29,7 +29,12 @@ const CFG = {
   imagesInterval: Number(env('HD_IMAGES_INTERVAL', 21600)),
   dockerSock: env('HD_DOCKER_SOCK', '/var/run/docker.sock')
 };
-if (!CFG.token) { console.error('HD_TOKEN manquant'); process.exit(1); }
+if (!CFG.token) {
+  // Pas de jeton : on attend sans planter (évite une boucle de redémarrage Docker)
+  console.error('HD_TOKEN manquant : renseigne le jeton fourni par Mon dashboard puis recrée le conteneur. En attente…');
+  setInterval(() => {}, 3600e3);
+  return;
+}
 if (CFG.insecure) process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);

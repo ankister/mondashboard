@@ -1,0 +1,40 @@
+# Exemple de déploiement complet (Mon dashboard + agent de la même machine),
+# construit directement depuis GitHub : aucun fichier à copier sur le serveur.
+#   1. docker compose -f docker-compose.example.yml up -d mondashboard
+#   2. Dans Mon dashboard : Administration → Intégrations → Agent (mode pull,
+#      URL http://IP-DU-SERVEUR:9123) → Installer l'agent → « Installation manuelle »
+#      et copie la valeur HD_TOKEN dans le fichier .env (HD_TOKEN=...)
+#   3. docker compose -f docker-compose.example.yml up -d
+services:
+  mondashboard:
+    build:
+      context: https://github.com/ankister/mondashboard.git#main
+    image: mondashboard:latest
+    container_name: mondashboard
+    restart: unless-stopped
+    ports:
+      - "3080:3080"
+    environment:
+      - TZ=Europe/Paris
+    volumes:
+      - ./data:/data
+
+  mondashboard-agent:
+    build:
+      context: https://github.com/ankister/mondashboard.git#main:agent
+    image: mondashboard-agent:latest
+    container_name: mondashboard-agent
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    privileged: true
+    # runtime: nvidia            # GPU Nvidia : décommente aussi les 2 variables ci-dessous
+    environment:
+      - HD_TOKEN=${HD_TOKEN:-}
+      - HD_MODE=pull
+      - HD_PORT=9123
+      # - NVIDIA_VISIBLE_DEVICES=all
+      # - NVIDIA_DRIVER_CAPABILITIES=utility
+    volumes:
+      - /:/host:ro
+      - /var/run/docker.sock:/var/run/docker.sock

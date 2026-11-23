@@ -123,6 +123,10 @@ docker compose -f docker-compose.unraid.yml up -d --build
 
 Données dans `/mnt/user/appdata/homedash`. Expose-le via NPM en HTTPS si tu veux y accéder de l'extérieur.
 
+### Variante : construire directement depuis GitHub
+
+`docker-compose.example.yml` déploie Mon dashboard **et** l'agent de la même machine sans rien copier : Docker construit les images depuis ce dépôt. Les étapes sont détaillées en tête du fichier.
+
 ## 5. Sécurité
 
 - Mot de passe admin haché (scrypt), session par cookie HttpOnly / SameSite=Strict, blocage de 5 minutes après 5 échecs.
