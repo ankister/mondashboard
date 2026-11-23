@@ -97,11 +97,12 @@ app.put('/api/pages', requireAdmin, wrap(req => {
 
 app.put('/api/settings', requireAdmin, wrap(req => {
   const st = load();
-  const { title, publicView, greeting, sessionHours } = req.body || {};
+  const { title, publicView, greeting, sessionHours, rememberDays } = req.body || {};
   if (title !== undefined) st.settings.title = String(title).slice(0, 40) || 'Mon dashboard';
   if (publicView !== undefined) st.settings.publicView = !!publicView;
   if (greeting !== undefined) st.settings.greeting = !!greeting;
   if (sessionHours !== undefined) st.settings.sessionHours = Math.min(8760, Math.max(1, Number(sessionHours) || 168));
+  if (rememberDays !== undefined) st.settings.rememberDays = Math.min(365, Math.max(1, Number(rememberDays) || 30));
   save();
   return { settings: st.settings };
 }));

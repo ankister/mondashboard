@@ -416,3 +416,11 @@ details.store summary { color: var(--muted); }
 .wx-cmp-clock { display: flex; flex-direction: column; align-items: flex-end; flex: none; }
 .wx-cmp .wx-hours { margin: 0; padding: 8px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 @media (max-width: 759px) { .wx-band { flex-direction: column; align-items: stretch; gap: 10px; } .wx-band-now { border-right: 0; padding-right: 0; } }
+
+/* ---------- Mot de passe affichable ---------- */
+.pw-wrap { position: relative; display: block; }
+.pw-wrap input { width: 100%; padding-right: 44px; }
+.pw-eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; background: none; border: 0; border-radius: 8px; color: var(--muted); cursor: pointer; }
+.pw-eye:hover, .pw-eye.on { color: var(--accent); }
+.pw-eye .pw-slash { display: none; }
+.pw-eye.on .pw-slash { display: inline; }

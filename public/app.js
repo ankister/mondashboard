@@ -134,6 +134,20 @@ async function boot() {
   renderApp();
 }
 
+// bouton « œil » pour afficher le mot de passe en clair
+const PW_EYE = `<button type="button" class="pw-eye" data-pw-eye aria-label="Afficher le mot de passe" title="Afficher le mot de passe">
+  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/><path class="pw-slash" d="M3 3l18 18"/></svg></button>`;
+function bindPwEyes(root) {
+  $$('[data-pw-eye]', root).forEach(b => b.addEventListener('click', () => {
+    const input = b.previousElementSibling;
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    b.classList.toggle('on', show);
+    b.title = b.ariaLabel = show ? 'Masquer le mot de passe' : 'Afficher le mot de passe';
+    input.focus();
+  }));
+}
+
 function renderAuth(mode) {
   const setup = mode === 'setup';
   $('#root').innerHTML = `
@@ -142,20 +156,23 @@ function renderAuth(mode) {
     <div class="muted small">${setup ? 'Première ouverture : crée le compte administrateur.' : 'Connexion administrateur'}</div>
     <form class="form" id="authForm">
       <label>Identifiant<input name="username" autocomplete="username" required></label>
-      <label>Mot de passe<input name="password" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required minlength="${setup ? 8 : 1}"></label>
-      ${setup ? '<label>Confirmer le mot de passe<input name="confirm" type="password" autocomplete="new-password" required></label>' : ''}
+      <label>Mot de passe<span class="pw-wrap"><input name="password" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required minlength="${setup ? 8 : 1}">${PW_EYE}</span></label>
+      ${setup ? `<label>Confirmer le mot de passe<span class="pw-wrap"><input name="confirm" type="password" autocomplete="new-password" required>${PW_EYE}</span></label>` : ''}
+      <label class="chk"><input type="checkbox" name="remember" ${localStorageGet('hd_remember') === '0' ? '' : 'checked'}> Rester connecté</label>
       <div class="err" id="authErr"></div>
       <button class="btn primary" type="submit">${setup ? 'Créer le compte' : 'Se connecter'}</button>
       ${!setup && S.session.publicView ? '<button class="btn" type="button" id="backView">Retour au tableau de bord</button>' : ''}
     </form>
   </div></div>`;
   $('#backView')?.addEventListener('click', boot);
+  bindPwEyes($('#authForm'));
   $('#authForm').addEventListener('submit', async e => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target));
     if (setup && f.password !== f.confirm) { $('#authErr').textContent = 'Les mots de passe ne correspondent pas'; return; }
     try {
-      await api(setup ? '/setup' : '/login', { method: 'POST', body: { username: f.username, password: f.password } });
+      localStorageSet('hd_remember', f.remember ? '1' : '0');
+      await api(setup ? '/setup' : '/login', { method: 'POST', body: { username: f.username, password: f.password, remember: !!f.remember } });
       boot();
     } catch (err) { $('#authErr').textContent = err.message; }
   });
@@ -1652,26 +1669,31 @@ function adminSettings(box) {
       <label>Titre du site<input name="title" value="${esc(st.title)}"></label>
       <label class="chk"><input type="checkbox" name="greeting" ${st.greeting !== false ? 'checked' : ''}> Afficher le message d'accueil (sinon le titre)</label>
       <label class="chk"><input type="checkbox" name="publicView" ${st.publicView ? 'checked' : ''}> Consultation sans connexion (lecture seule ; les actions restent réservées à l'admin)</label>
-      <label>Durée de session (heures)<input type="number" name="sessionHours" min="1" value="${st.sessionHours || 168}"></label>
+      <div class="row2">
+        <label>Session sans « Rester connecté » (heures)<input type="number" name="sessionHours" min="1" value="${st.sessionHours || 168}"></label>
+        <label>Durée de « Rester connecté » (jours)<input type="number" name="rememberDays" min="1" max="365" value="${st.rememberDays || 30}"></label>
+      </div>
       <div style="display:flex;justify-content:flex-end"><button class="btn primary">Enregistrer</button></div>
     </form>
     <div class="muted small" style="margin-top:14px">Version : <b class="mono">${esc(S.session.version || '?')}</b></div>
     <div class="section-lbl" style="margin-top:22px">Mot de passe</div>
     <form class="form" id="pwForm"><div class="row2">
-      <label>Actuel<input type="password" name="current" autocomplete="current-password"></label>
-      <label>Nouveau (8 caractères min.)<input type="password" name="next" autocomplete="new-password" minlength="8"></label></div>
+      <label>Actuel<span class="pw-wrap"><input type="password" name="current" autocomplete="current-password">${PW_EYE}</span></label>
+      <label>Nouveau (8 caractères min.)<span class="pw-wrap"><input type="password" name="next" autocomplete="new-password" minlength="8">${PW_EYE}</span></label></div>
+      <div class="help">Changer le mot de passe déconnecte tous tes autres appareils.</div>
       <div style="display:flex;justify-content:space-between"><button class="btn danger" type="button" data-logout>Se déconnecter</button><button class="btn">Changer le mot de passe</button></div>
     </form>`;
   $('#setForm', box).onsubmit = async e => {
     e.preventDefault();
     const f = e.target;
     try {
-      const r = await api('/settings', { method: 'PUT', body: { title: f.title.value, greeting: f.greeting.checked, publicView: f.publicView.checked, sessionHours: f.sessionHours.value } });
+      const r = await api('/settings', { method: 'PUT', body: { title: f.title.value, greeting: f.greeting.checked, publicView: f.publicView.checked, sessionHours: f.sessionHours.value, rememberDays: f.rememberDays.value } });
       S.dash.settings = r.settings; S.session.title = r.settings.title; document.title = r.settings.title;
       toast('Paramètres enregistrés ✓');
       renderApp();
     } catch (err) { toast(err.message, true); }
   };
+  bindPwEyes(box);
   $('#pwForm', box).onsubmit = async e => {
     e.preventDefault();
     try {
