@@ -1,5 +1,6 @@
-# Exemple de déploiement complet (Mon dashboard + agent de la même machine),
-# construit directement depuis GitHub : aucun fichier à copier sur le serveur.
+# Exemple de déploiement complet (Mon dashboard + agent de la même machine).
+# Les images sont publiées automatiquement sur ghcr.io à chaque mise à jour du dépôt :
+# ton gestionnaire (Dockhand, Portainer, Watchtower…) peut donc les mettre à jour.
 #   1. docker compose -f docker-compose.example.yml up -d mondashboard
 #   2. Dans Mon dashboard : Administration → Intégrations → Agent (mode pull,
 #      URL http://IP-DU-SERVEUR:9123) → Installer l'agent → « Installation manuelle »
@@ -7,22 +8,19 @@
 #   3. docker compose -f docker-compose.example.yml up -d
 services:
   mondashboard:
-    build:
-      context: https://github.com/ankister/mondashboard.git#main
-    image: mondashboard:latest
+    image: ghcr.io/ankister/mondashboard:latest
     container_name: mondashboard
     restart: unless-stopped
     ports:
       - "3080:3080"
     environment:
       - TZ=Europe/Paris
+      - SECRET_KEY=${SECRET_KEY}
     volumes:
       - ./data:/data
 
   mondashboard-agent:
-    build:
-      context: https://github.com/ankister/mondashboard.git#main:agent
-    image: mondashboard-agent:latest
+    image: ghcr.io/ankister/mondashboard-agent:latest
     container_name: mondashboard-agent
     restart: unless-stopped
     network_mode: host

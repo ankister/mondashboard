@@ -123,9 +123,14 @@ docker compose -f docker-compose.unraid.yml up -d --build
 
 Données dans `/mnt/user/appdata/homedash`. Expose-le via NPM en HTTPS si tu veux y accéder de l'extérieur.
 
-### Variante : construire directement depuis GitHub
+### Images prêtes à l'emploi (ghcr.io)
 
-`docker-compose.example.yml` déploie Mon dashboard **et** l'agent de la même machine sans rien copier : Docker construit les images depuis ce dépôt. Les étapes sont détaillées en tête du fichier.
+À chaque mise à jour de la branche `main`, GitHub Actions construit et publie :
+
+- `ghcr.io/ankister/mondashboard:latest`
+- `ghcr.io/ankister/mondashboard-agent:latest`
+
+`docker-compose.example.yml` les utilise directement : rien à construire, et les outils de mise à jour (Dockhand, Portainer, Watchtower…) détectent les nouvelles versions.
 
 ### Droits sur le dossier de données
 
