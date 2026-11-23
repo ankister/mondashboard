@@ -212,13 +212,16 @@ async function widgetData(w) {
     case 'rss': {
       const { results, errors } = await fromIntegrations(w, 'rss');
       const feeds = String(cfg.feeds || '').split(/\s+/).filter(u => /^https?:\/\//.test(u));
-      await Promise.all(feeds.map(async u => {
+      if (!cfg._c) await Promise.all(feeds.map(async u => {
         try { results.push({ items: await readFeed(u) }); }
         catch (e) { errors.push({ name: u, error: e.message }); }
       }));
+      // pages suivantes (défilement) : uniquement la source qui pagine (FreshRSS)
       const items = results.flatMap(r => r.items)
-        .sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, cfg.limit || 12);
-      return { items, errors };
+        .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+        .slice(0, cfg._c ? 200 : Math.max(cfg.limit || 40, 40));
+      const continuation = results.find(r => r.continuation)?.continuation || null;
+      return { items, errors, continuation };
     }
     default: {
       const kind = WIDGETS[w.type].kind;
@@ -244,6 +247,10 @@ app.get('/api/widgets/:pageId/:widgetId', requireView, wrap(async req => {
   if (found.type === 'calendar' && from && to && to > from && to - from <= 70 * 864e5) {
     w = { ...found, config: { ...(found.config || {}), _from: new Date(from).toISOString(), _to: new Date(to).toISOString() } };
     key = `${found.id}|${from}|${to}`;
+  }
+  if (found.type === 'rss' && req.query.c) {
+    w = { ...found, config: { ...(found.config || {}), _c: String(req.query.c).slice(0, 300) } };
+    key = `${found.id}|c|${req.query.c}`;
   }
   const ttl = Math.max(2000, w.refresh * 1000 * 0.8);
   const c = cache.get(key);
@@ -274,7 +281,7 @@ app.post('/api/widgets/:pageId/:widgetId/action', requireAdmin, wrap(async req =
   const def = INTEGRATIONS[it?.type];
   if (!def?.action) throw bad('Action non disponible');
   const r = await def.action(it.config, req.body, it);
-  cache.delete(w.id);
+  for (const k of cache.keys()) if (k === w.id || k.startsWith(w.id + '|')) cache.delete(k);
   return r;
 }));
 

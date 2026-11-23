@@ -223,7 +223,9 @@ details.upd ul { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; }
 .cat-box { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
 .cat-box .cat-h { display: flex; gap: 8px; margin-bottom: 8px; }
 .cat-box .cat-h input { flex: 1; font-weight: 600; }
-.link-row { display: grid; grid-template-columns: 1.1fr 2fr 1fr 1fr auto; gap: 6px; margin-bottom: 6px; }
+.link-row { display: grid; grid-template-columns: 30px 1.1fr 2fr 1fr 1fr auto; gap: 6px; margin-bottom: 6px; align-items: center; }
+.ico-prev { width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; }
+.ico-prev img, .ico-prev .letter { width: 24px; height: 24px; font-size: 12px; border-radius: 6px; object-fit: contain; }
 .link-row input { padding: 6px 8px !important; font-size: 13px; }
 .geo-res { display: grid; gap: 4px; }
 .geo-res button { text-align: left; }
@@ -306,3 +308,45 @@ details.store summary { color: var(--muted); }
 .cal-day .dots i { width: 5px; height: 5px; border-radius: 50%; display: block; }
 .cal-sel { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
 .cal-sel .day-lbl { text-transform: capitalize; }
+
+/* ---------- Torrents ---------- */
+.tor-list { display: flex; flex-direction: column; }
+.tor { border-bottom: 1px solid rgba(58, 69, 80, .55); }
+.tor:last-child { border-bottom: 0; }
+.tor-row { display: grid; grid-template-columns: 20px minmax(0, 1fr) 52px minmax(60px, 22%) auto 26px; gap: 8px; align-items: center; padding: 7px 2px; cursor: pointer; border-radius: 6px; font-size: 13.5px; }
+.tor-row:hover { background: var(--card-h); }
+.tor-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tor-bar { display: block; } .tor-bar .bar { display: block; }
+.tor-btn { display: flex; align-items: center; justify-content: center; }
+.tor-pct { text-align: right; font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--muted); }
+.tor-right { white-space: nowrap; text-align: right; color: var(--muted); }
+.tor.open .tor-row { background: var(--card-h); }
+.tor-det { display: flex; gap: 16px; align-items: flex-start; padding: 10px 6px 14px; }
+.tor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 16px; flex: 1; min-width: 0; font-size: 13px; }
+.tor-grid span { display: block; color: var(--muted); font-size: 11.5px; }
+.tor-grid b { font-weight: 500; overflow-wrap: anywhere; }
+.tor-grid .wide { grid-column: 1 / -1; }
+.ring { width: 64px; height: 64px; flex: none; }
+.ring circle { fill: none; stroke-width: 6; }
+.ring .bg { stroke: var(--bg2); }
+.ring .fg { stroke: var(--accent); stroke-linecap: round; transform: rotate(-90deg); transform-origin: 32px 32px; }
+.ring.done .fg, .ring.seed .fg { stroke: var(--ok); } .ring.pause .fg { stroke: var(--warn); } .ring.err .fg { stroke: var(--bad); }
+.ring text { fill: var(--text); font-size: 13px; font-weight: 600; text-anchor: middle; }
+.tor.st-pause .tor-name { color: var(--muted); }
+@media (max-width: 700px) { .tor-row { grid-template-columns: 20px minmax(0, 1fr) 48px 26px; } .tor-bar, .tor-right { display: none; } }
+
+/* ---------- Flux RSS ---------- */
+.rss-meta { margin-bottom: 4px; }
+.rss-list { max-height: 460px; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
+.fixed-h .rss-list { max-height: none; }
+.fixed-h .w-dyn:has(.rss-list) { display: flex; flex-direction: column; height: 100%; }
+.fixed-h .w-dyn .rss-list { flex: 1; min-height: 0; }
+.rss-item.read .t { color: var(--muted); font-weight: 400; }
+.unread-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-right: 7px; vertical-align: 2px; }
+.rss-more, .rss-end { text-align: center; padding: 10px 0; }
+.rss-list::-webkit-scrollbar { width: 8px; } .rss-list::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.reader h1 { font-size: 22px; margin: 0 0 6px; line-height: 1.3; }
+.reader-body { margin-top: 14px; font-size: 15px; line-height: 1.65; }
+.reader-body img { max-width: 100%; height: auto; border-radius: 8px; }
+.reader-body figure { margin: 12px 0; }
+.reader-body figcaption { color: var(--muted); font-size: 12.5px; }

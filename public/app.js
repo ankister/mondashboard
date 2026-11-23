@@ -59,24 +59,49 @@ async function api(path, opts = {}) {
   return data;
 }
 
-// Icônes : URL, emoji, ou nom du dépôt dashboard-icons (ex. « plex »)
+// Icônes : URL, emoji, ou nom du catalogue dashboard-icons (ex. « plex »).
+// Ordre d'essai : catalogue (SVG puis PNG) → icône du site lui-même → initiale.
 const ICON_CDN = 'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons';
-function iconHtml(icon, name) {
+const slugify = v => String(v || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+function siteIcons(url) {
+  try {
+    const u = new URL(url);
+    if (!/^https?:$/.test(u.protocol)) return [];
+    return [`${u.origin}/apple-touch-icon.png`, `${u.origin}/favicon.svg`, `${u.origin}/favicon.ico`, `${u.origin}/favicon.png`];
+  } catch { return []; }
+}
+function iconHtml(icon, name, url) {
   const letter = `<span class="letter">${esc((name || '?').trim()[0]?.toUpperCase() || '?')}</span>`;
-  if (!icon) return letter;
-  if (/^(https?:)?\/\//.test(icon) || icon.startsWith('/')) return `<img src="${esc(icon)}" alt="" loading="lazy" data-letter="${esc(name)}">`;
-  if (/\p{Extended_Pictographic}/u.test(icon)) return `<span style="font-size:26px">${esc(icon)}</span>`;
-  const slug = icon.toLowerCase().replace(/[^a-z0-9-]/g, '');
-  return `<img src="${ICON_CDN}/svg/${slug}.svg" data-png="${ICON_CDN}/png/${slug}.png" data-letter="${esc(name)}" alt="" loading="lazy">`;
+  icon = String(icon || '').trim();
+  if (icon && /\p{Extended_Pictographic}/u.test(icon) && !/[a-z0-9]/i.test(icon)) return `<span style="font-size:26px">${esc(icon)}</span>`;
+  let list;
+  if (/^(https?:)?\/\//.test(icon) || icon.startsWith('/')) list = [icon];
+  else {
+    const slugs = [...new Set([slugify(icon), slugify(name)].filter(Boolean))];
+    list = slugs.flatMap(sl => [`${ICON_CDN}/svg/${sl}.svg`, `${ICON_CDN}/png/${sl}.png`]);
+  }
+  list.push(...siteIcons(url));
+  if (!list.length) return letter;
+  const [first, ...rest] = list;
+  return `<img src="${esc(first)}" data-fb="${esc(JSON.stringify(rest))}" data-letter="${esc(name)}" alt="" loading="lazy">`;
 }
 document.addEventListener('error', e => {
   const img = e.target;
+  if (img.tagName === 'IMG' && img.closest('.reader-body')) { img.remove(); return; } // image d'article introuvable
   if (img.tagName !== 'IMG' || img.dataset.letter === undefined) return;
-  if (img.dataset.png) { const p = img.dataset.png; delete img.dataset.png; img.src = p; return; }
-  const s = document.createElement('span');
-  s.className = 'letter';
-  s.textContent = (img.dataset.letter || '?').trim()[0]?.toUpperCase() || '?';
-  img.replaceWith(s);
+  let rest = [];
+  try { rest = JSON.parse(img.dataset.fb || '[]'); } catch { /* liste illisible */ }
+  if (rest.length) { img.dataset.fb = JSON.stringify(rest.slice(1)); img.src = rest[0]; return; }
+  const sp = document.createElement('span');
+  sp.className = 'letter';
+  sp.textContent = (img.dataset.letter || '?').trim()[0]?.toUpperCase() || '?';
+  img.replaceWith(sp);
+}, true);
+// une image chargée mais minuscule (favicon vide, pixel de suivi) est ignorée
+document.addEventListener('load', e => {
+  const img = e.target;
+  if (img.tagName === 'IMG' && img.dataset.letter !== undefined && img.naturalWidth > 0 && img.naturalWidth < 8) img.dispatchEvent(new Event('error'));
 }, true);
 
 // ================= État =================
@@ -417,6 +442,188 @@ function calMonth(evs, st) {
     </div>`;
 }
 
+// ---------- torrents : utilitaires ----------
+const isPaused = st => /^(paused|stopped)/.test(st || '');
+const TOR_STATE = {
+  downloading: ['⬇', 'Téléchargement', 'run'], forcedDL: ['⬇', 'Téléchargement forcé', 'run'], metaDL: ['🔍', 'Métadonnées', 'run'],
+  stalledDL: ['⏳', 'En attente de pairs', 'wait'], queuedDL: ['…', 'En file', 'wait'], checkingDL: ['🔍', 'Vérification', 'wait'],
+  uploading: ['⬆', 'En partage', 'seed'], forcedUP: ['⬆', 'Partage forcé', 'seed'], stalledUP: ['⬆', 'En partage', 'seed'],
+  queuedUP: ['…', 'En file', 'wait'], checkingUP: ['🔍', 'Vérification', 'wait'],
+  pausedDL: ['⏸', 'En pause', 'pause'], stoppedDL: ['⏸', 'En pause', 'pause'], pausedUP: ['✓', 'Terminé', 'done'], stoppedUP: ['✓', 'Terminé', 'done'],
+  error: ['⚠', 'Erreur', 'err'], missingFiles: ['⚠', 'Fichiers manquants', 'err'], moving: ['⇄', 'Déplacement', 'wait']
+};
+const fmtDate = ts => (ts > 0 ? new Date(ts * 1000).toLocaleString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—');
+const ring = (pctv, cls) => {
+  const r = 26, c = 2 * Math.PI * r;
+  return `<svg class="ring ${cls}" viewBox="0 0 64 64"><circle cx="32" cy="32" r="${r}" class="bg"/><circle cx="32" cy="32" r="${r}" class="fg" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - Math.min(100, pctv) / 100)}"/><text x="32" y="37">${Math.floor(pctv)}%</text></svg>`;
+};
+function torRow(t, open, intId) {
+  const [ico, label, cls] = TOR_STATE[t.state] || ['•', t.state, 'wait'];
+  const paused = isPaused(t.state);
+  const icoPlay = '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M7 4.5v15l13-7.5z" fill="currentColor"/></svg>';
+  const icoPause = '<svg viewBox="0 0 24 24" width="15" height="15"><rect x="5.5" y="4.5" width="4.5" height="15" rx="1" fill="currentColor"/><rect x="14" y="4.5" width="4.5" height="15" rx="1" fill="currentColor"/></svg>';
+  const btn = canEdit() ? `<button type="button" class="iconbtn tor-btn" data-tor-op="${paused ? 'resume' : 'pause'}" data-hash="${esc(t.hash)}" data-int="${esc(intId || '')}" title="${paused ? 'Reprendre' : 'Mettre en pause'}">${paused ? icoPlay : icoPause}</button>` : '';
+  const right = t.progress < 100 && !paused ? `${fmtSpeed(t.dlspeed)} · ${fmtEta(t.eta)}` : fmtBytes(t.size);
+  return `
+    <div class="tor ${open ? 'open' : ''} st-${cls}" data-hash="${esc(t.hash)}">
+      <div class="tor-row" data-tor-toggle="${esc(t.hash)}">
+        <span class="tor-ico" title="${esc(label)}">${ico}</span>
+        <span class="tor-name" title="${esc(t.name)}">${esc(t.name)}</span>
+        <span class="tor-pct">${t.progress.toFixed(t.progress < 100 ? 1 : 0).replace('.', ',')} %</span>
+        <span class="tor-bar"><span class="bar"><i class="${cls === 'err' ? 'bad' : cls === 'pause' ? 'warn' : ''}" style="width:${t.progress}%"></i></span></span>
+        <span class="tor-right small">${right}</span>
+        ${btn}
+      </div>
+      ${open ? `<div class="tor-det">
+        ${ring(t.progress, cls)}
+        <div class="tor-grid">
+          <div><span>État</span><b>${esc(label)}</b></div>
+          <div><span>Taille</span><b>${fmtBytes(t.downloaded)} / ${fmtBytes(t.totalSize || t.size)}</b></div>
+          <div><span>Ratio</span><b>${t.ratio != null ? Number(t.ratio).toFixed(2).replace('.', ',') : '—'}</b></div>
+          <div><span>Total envoyé</span><b>${fmtBytes(t.uploaded)}</b></div>
+          <div><span>Vitesses</span><b>↓ ${fmtSpeed(t.dlspeed)} · ↑ ${fmtSpeed(t.upspeed)}</b></div>
+          <div><span>Seeds / pairs</span><b>${t.seeds ?? '—'} (${t.seedsTotal ?? '?'}) / ${t.peers ?? '—'} (${t.peersTotal ?? '?'})</b></div>
+          <div><span>Ajouté</span><b>${fmtDate(t.addedOn)}</b></div>
+          <div><span>${t.completionOn > 0 ? 'Terminé' : 'Fin estimée'}</span><b>${t.completionOn > 0 ? relTime(new Date(t.completionOn * 1000).toISOString()) : (paused ? '—' : fmtEta(t.eta))}</b></div>
+          <div><span>Catégorie</span><b>${esc(t.category || '—')}</b></div>
+          <div class="wide"><span>Dossier</span><b class="mono">${esc(t.savePath || '—')}</b></div>
+          <div class="wide"><span>Hash</span><b class="mono">${esc(t.hash)}</b></div>
+        </div>
+      </div>` : ''}
+    </div>`;
+}
+
+// ---------- lecteur d'articles : nettoyage du HTML des flux ----------
+const SAFE_TAGS = new Set(['P', 'BR', 'A', 'IMG', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'PRE', 'CODE', 'EM', 'STRONG', 'B', 'I', 'U', 'S', 'DEL', 'SUP', 'SUB', 'SMALL', 'MARK', 'HR', 'FIGURE', 'FIGCAPTION', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'DIV', 'SPAN', 'PICTURE', 'SOURCE', 'DL', 'DT', 'DD', 'ABBR', 'CITE', 'Q', 'TIME']);
+function sanitizeHtml(html, base) {
+  const doc = new DOMParser().parseFromString(`<div>${html || ''}</div>`, 'text/html');
+  const abs = v => { try { return new URL(v, base || undefined).href; } catch { return ''; } };
+  const walk = node => {
+    for (const el of [...node.children]) {
+      if (!SAFE_TAGS.has(el.tagName)) {
+        if (['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'FORM', 'INPUT', 'BUTTON', 'TEXTAREA', 'SELECT', 'NOSCRIPT', 'SVG', 'MATH', 'LINK', 'META', 'BASE'].includes(el.tagName)) { el.remove(); continue; }
+        el.replaceWith(...el.childNodes); // garde le texte, retire la balise
+        continue;
+      }
+      for (const a of [...el.attributes]) {
+        const n = a.name.toLowerCase();
+        const keep = (n === 'href' && el.tagName === 'A') || (['src', 'srcset', 'alt', 'width', 'height'].includes(n) && ['IMG', 'SOURCE'].includes(el.tagName)) || (n === 'title') || (['colspan', 'rowspan'].includes(n));
+        if (!keep) { el.removeAttribute(a.name); continue; }
+        if (n === 'href' || n === 'src') {
+          const u = abs(a.value);
+          if (!/^(https?:|mailto:)/i.test(u) || (n === 'src' && !/^https?:/i.test(u))) el.removeAttribute(a.name);
+          else el.setAttribute(a.name, u);
+        }
+        if (n === 'srcset') el.removeAttribute(a.name);
+      }
+      if (el.tagName === 'A') { el.setAttribute('target', '_blank'); el.setAttribute('rel', 'noopener noreferrer'); }
+      if (el.tagName === 'IMG') { el.setAttribute('loading', 'lazy'); el.setAttribute('referrerpolicy', 'no-referrer'); }
+      walk(el);
+    }
+  };
+  walk(doc.body.firstChild);
+  return doc.body.firstChild.innerHTML;
+}
+
+// ---------- flux RSS : liste défilante, chargement continu, lu au défilement ----------
+function rssPaint(w, el, errors) {
+  const st = RENDER.rss.st(w);
+  const dyn = $('.w-dyn', el);
+  let list = $('.rss-list', dyn);
+  const prevScroll = list ? list.scrollTop : 0;
+  if (!st.items.length) { dyn.innerHTML = '<div class="empty">Aucun article</div>' + errorsHtml(errors); fitWidget(w.id); return; }
+  const unread = st.items.filter(i => i.integrationId && !i.read).length;
+  dyn.innerHTML = `
+    <div class="rss-meta muted small">${st.items.length} article(s)${unread ? ` · <b style="color:var(--accent)">${unread} non lu(s)</b>` : ''}</div>
+    <div class="rss-list">${st.items.map((i, k) => `
+      <a class="rss-item ${i.read ? 'read' : ''}" href="${esc(safeUrl(i.link))}" data-k="${k}" target="_blank" rel="noopener">
+        <div class="t">${i.integrationId && !i.read ? '<i class="unread-dot"></i>' : ''}${esc(i.title)}</div>
+        <div class="s">${esc(i.source)}${i.date ? ` · ${relTime(i.date)}` : ''}</div>
+      </a>`).join('')}
+      ${st.cont ? '<div class="rss-more muted small">Chargement des articles suivants…</div>' : '<div class="rss-end muted small">— Fin des articles —</div>'}
+    </div>${errorsHtml(errors)}`;
+  list = $('.rss-list', dyn);
+  list.scrollTop = prevScroll;
+  rssObserve(w, el, list);
+  fitWidget(w.id);
+}
+function rssObserve(w, el, list) {
+  const st = RENDER.rss.st(w);
+  st.obs?.disconnect();
+  const markOnScroll = w.config?.markOnScroll !== false && canEdit();
+  // un article qui sort par le haut de la liste a été « vu » : on le marque lu
+  st.obs = new IntersectionObserver(entries => {
+    for (const en of entries) {
+      if (en.isIntersecting || !en.rootBounds || en.boundingClientRect.bottom > en.rootBounds.top + 4) continue;
+      const it = st.items[Number(en.target.dataset.k)];
+      if (it && it.integrationId && !it.read && markOnScroll) rssMarkRead(w, el, [it]);
+    }
+  }, { root: list, threshold: 0 });
+  $$('.rss-item:not(.read)', list).forEach(a => st.obs.observe(a));
+  list.onscroll = () => {
+    if (st.cont && !st.loading && list.scrollTop + list.clientHeight > list.scrollHeight - 200) rssMore(w, el);
+  };
+  list.onclick = e => {
+    const a = e.target.closest('.rss-item');
+    if (!a || e.ctrlKey || e.metaKey || e.button === 1) return; // Ctrl+clic : nouvel onglet
+    e.preventDefault();
+    const it = st.items[Number(a.dataset.k)];
+    rssReader(w, el, it);
+  };
+}
+async function rssMore(w, el) {
+  const st = RENDER.rss.st(w);
+  st.loading = true;
+  try {
+    const d = await api(`/widgets/${page().id}/${w.id}?c=${encodeURIComponent(st.cont)}`);
+    const add = (d.items || []).filter(i => !st.ids.has(i.id || i.link));
+    add.forEach(i => st.ids.add(i.id || i.link));
+    st.items.push(...add);
+    st.cont = d.continuation || null;
+    rssPaint(w, el);
+  } catch (e) { toast(e.message, true); }
+  st.loading = false;
+}
+function rssMarkRead(w, el, items) {
+  const st = RENDER.rss.st(w);
+  for (const it of items) {
+    if (!it.integrationId || it.read) continue;
+    it.read = true;
+    if (!st.queue.has(it.integrationId)) st.queue.set(it.integrationId, new Set());
+    st.queue.get(it.integrationId).add(it.id);
+    const a = $(`.rss-item[data-k="${st.items.indexOf(it)}"]`, el);
+    if (a) { a.classList.add('read'); a.querySelector('.unread-dot')?.remove(); }
+  }
+  const meta = $('.rss-meta', el);
+  if (meta) {
+    const unread = st.items.filter(i => i.integrationId && !i.read).length;
+    meta.innerHTML = `${st.items.length} article(s)${unread ? ` · <b style="color:var(--accent)">${unread} non lu(s)</b>` : ''}`;
+  }
+  clearTimeout(st.flushT);
+  st.flushT = setTimeout(async () => {
+    for (const [integrationId, ids] of st.queue) {
+      st.queue.delete(integrationId);
+      try { await api(`/widgets/${page().id}/${w.id}/action`, { method: 'POST', body: { op: 'read', integrationId, ids: [...ids] } }); }
+      catch (e) { toast(`FreshRSS : ${e.message}`, true); }
+    }
+  }, 1200);
+}
+function rssReader(w, el, it) {
+  if (!it) return;
+  if (canEdit()) rssMarkRead(w, el, [it]);
+  const body = it.content ? sanitizeHtml(it.content, it.link) : '<p class="muted">Pas de contenu dans le flux pour cet article.</p>';
+  const m = modal({
+    title: it.source || 'Article', wide: true,
+    body: `<article class="reader">
+      <h1>${esc(it.title)}</h1>
+      <div class="muted small">${esc([it.author, it.date ? new Date(it.date).toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' }) : ''].filter(Boolean).join(' · '))}</div>
+      <div class="reader-body md">${body}</div>
+    </article>`,
+    footer: `<a class="btn" href="${esc(safeUrl(it.link))}" target="_blank" rel="noopener">Ouvrir l'article original ↗</a><button class="btn primary" data-close2>Fermer</button>`
+  });
+  $('[data-close2]', m.el).onclick = m.close;
+}
+
 const RENDER = {
   bookmarks: {
     static(w) {
@@ -428,14 +635,14 @@ const RENDER = {
         return `<div class="bm-cols">${cats.map(cat => `
           <div><div class="bm-cat">${esc(cat.name)}</div>
           ${cat.links.map(l => `<a class="bm-link" href="${esc(safeUrl(l.url))}" target="_blank" rel="noopener" title="${esc(l.url)}">
-            ${iconHtml(l.icon, l.name)}<span class="app-name">${esc(l.name)}</span>${dot(l)}</a>`).join('')}
+            ${iconHtml(l.icon, l.name, l.url)}<span class="app-name">${esc(l.name)}</span>${dot(l)}</a>`).join('')}
           </div>`).join('')}</div>`;
       }
       return cats.map(cat => `
         <div class="bm-section"><div class="bm-cat">${esc(cat.name)}</div>
         <div class="apps">${cat.links.map(l => `
           <a class="app-tile" data-tile="${l.id}" href="${esc(safeUrl(l.url))}" target="_blank" rel="noopener" title="${esc(l.url)}">
-            <div class="app-ico">${iconHtml(l.icon, l.name)}</div>
+            <div class="app-ico">${iconHtml(l.icon, l.name, l.url)}</div>
             <div class="app-txt"><div class="app-name">${esc(l.name)}</div>
             <div class="app-url">${esc(l.desc || l.url.replace(/^https?:\/\//, '').replace(/\/$/, ''))}</div></div>
             ${dot(l)}
@@ -581,6 +788,26 @@ const RENDER = {
         <button class="btn primary" type="submit">Ajouter</button>
       </form>` : ''),
     bind(w, el) {
+      S.tor ||= {};
+      el.addEventListener('click', async e => {
+        const op = e.target.closest('[data-tor-op]');
+        if (op) {
+          e.stopPropagation();
+          op.disabled = true;
+          try {
+            await api(`/widgets/${page().id}/${w.id}/action`, { method: 'POST', body: { op: op.dataset.torOp, hash: op.dataset.hash, integrationId: op.dataset.int || undefined } });
+            toast(op.dataset.torOp === 'pause' ? 'Torrent mis en pause' : 'Torrent repris');
+          } catch (err) { toast(err.message, true); }
+          setTimeout(() => loadWidget(w), 600);
+          return;
+        }
+        const row = e.target.closest('[data-tor-toggle]');
+        if (row) {
+          const h = row.dataset.torToggle;
+          S.tor[w.id] = S.tor[w.id] === h ? null : h;
+          if (S.cache[w.id]) paintWidget(w, S.cache[w.id]);
+        }
+      });
       const form = $('[data-add]', el);
       if (!form) return;
       const send = async body => {
@@ -604,28 +831,39 @@ const RENDER = {
         rd.readAsDataURL(file);
       });
     },
-    dyn(d) {
+    dyn(d, w) {
       if (d.offline) return '<div class="w-err">qBittorrent injoignable</div>';
+      S.tor ||= {};
+      const open = S.tor[w.id];
       const conn = { connected: '<span class="st-running">● Connecté</span>', firewalled: '<span class="st-paused">● Derrière un pare-feu</span>', disconnected: '<span class="st-exited">● Déconnecté</span>' }[d.connection] || '';
-      const st = { downloading: '⬇', stalledDL: '⏳', uploading: '⬆', stalledUP: '⬆', pausedDL: '⏸', pausedUP: '✓', stoppedDL: '⏸', stoppedUP: '✓', queuedDL: '…', checkingDL: '🔍', metaDL: '🔍', error: '⚠', missingFiles: '⚠' };
+      const list = d.torrents || [];
+      const active = list.filter(t => !isPaused(t.state) && t.progress < 100).length;
       return `
-        <div class="speeds"><span>↓ <b>${fmtSpeed(d.dl)}</b></span><span>↑ <b>${fmtSpeed(d.ul)}</b></span><span class="small">${conn}</span></div>
-        <table class="tbl"><tbody>${(d.torrents || []).map(t => `<tr>
-          <td class="ellip" title="${esc(t.name)}">${st[t.state] || '•'} ${esc(t.name)}</td>
-          <td style="width:28%"><div class="bar"><i style="width:${t.progress}%"></i></div></td>
-          <td class="small" style="white-space:nowrap;text-align:right">${t.progress < 100 ? `${fmtSpeed(t.dlspeed)} · ${fmtEta(t.eta)}` : fmtBytes(t.size)}</td>
-        </tr>`).join('') || '<tr><td class="empty">Aucun torrent</td></tr>'}</tbody></table>`;
+        <div class="speeds"><span>↓ <b>${fmtSpeed(d.dl)}</b></span><span>↑ <b>${fmtSpeed(d.ul)}</b></span><span class="small">${conn}</span>
+          <span class="muted small" style="margin-left:auto">${list.length} torrent(s) · ${active} en cours</span></div>
+        <div class="tor-list">${list.map(t => torRow(t, open === t.hash, d.integrationId)).join('') || '<div class="empty">Aucun torrent</div>'}</div>`;
     }
   },
 
   rss: {
-    dyn(d) {
-      if (!d.items?.length) return '<div class="empty">Aucun article</div>';
-      return d.items.map(i => `
-        <a class="rss-item" href="${esc(safeUrl(i.link))}" target="_blank" rel="noopener">
-          <div class="t">${esc(i.title)}</div>
-          <div class="s">${esc(i.source)}${i.date ? ` · ${relTime(i.date)}` : ''}</div>
-        </a>`).join('');
+    // les articles sont gardés côté navigateur pour pouvoir défiler et charger la suite
+    st(w) {
+      S.rss ||= {};
+      return (S.rss[w.id] ||= { items: [], ids: new Set(), cont: null, loading: false, queue: new Map(), scroll: 0 });
+    },
+    dyn(d, w, el) {
+      const st = RENDER.rss.st(w);
+      // rafraîchissement : nouveaux articles en tête, les articles déjà chargés sont conservés
+      const fresh = (d.items || []).filter(i => !st.ids.has(i.id || i.link));
+      fresh.forEach(i => st.ids.add(i.id || i.link));
+      if (!st.items.length) { st.items = d.items || []; st.cont = d.continuation || null; }
+      else {
+        st.items = [...fresh, ...st.items];
+        const byId = new Map((d.items || []).map(i => [i.id || i.link, i]));
+        st.items = st.items.map(i => (byId.has(i.id || i.link) ? { ...byId.get(i.id || i.link), read: i.read || byId.get(i.id || i.link).read } : i));
+      }
+      rssPaint(w, el, d.errors);
+      return undefined;
     }
   },
 
@@ -974,7 +1212,7 @@ function widgetForm(orig) {
       </div>
       ${intField}
       ${(d.options || []).map(o => optionField(o, w.config?.[o.key])).join('')}
-      ${w.type === 'bookmarks' ? '<div class="section-lbl">Catégories et liens</div><div id="bmEditor"></div><div class="help">Icône : nom d\'icône du dépôt <i>dashboard-icons</i> (ex. <span class="mono">plex</span>, <span class="mono">home-assistant</span>), une URL d\'image, ou un emoji. « URL de test » permet de vérifier une adresse interne différente du lien.</div>' : ''}
+      ${w.type === 'bookmarks' ? '<div class="section-lbl">Catégories et liens</div><div id="bmEditor"></div><div class="help">Icône : nom du catalogue <a href="https://dashboardicons.com" target="_blank" rel="noopener" style="color:var(--accent)">dashboardicons.com</a> (ex. <span class="mono">plex</span>, <span class="mono">uptime-kuma</span>), une URL d\'image ou un emoji. Laisse vide pour essayer le nom du service puis l\'icône du site. « URL de test » permet de vérifier une adresse interne différente du lien.</div>' : ''}
     </form>`,
     footer: '<button class="btn" data-cancel>Annuler</button><button class="btn primary" data-save>Enregistrer</button>'
   });
@@ -1003,9 +1241,10 @@ function widgetForm(orig) {
           <button type="button" class="iconbtn" data-cdel="${ci}" title="Supprimer la catégorie">✕</button></div>
         ${c.links.map((l, li) => `
           <div class="link-row" data-id="${l.id}" data-ping="${esc(l.pingUrl || '')}" data-noping="${l.noPing ? 1 : 0}">
+            <span class="ico-prev" title="Aperçu de l'icône">${iconHtml(l.icon, l.name, l.url)}</span>
             <input class="input" data-k="name" value="${esc(l.name)}" placeholder="Nom">
             <input class="input" data-k="url" value="${esc(l.url)}" placeholder="https://…">
-            <input class="input" data-k="icon" value="${esc(l.icon)}" placeholder="icône">
+            <input class="input" data-k="icon" value="${esc(l.icon)}" placeholder="nom ou URL d’image" title="Nom du catalogue dashboardicons.com (ex. plex), URL d’une image (https://…/logo.png) ou emoji">
             <input class="input" data-k="desc" value="${esc(l.desc)}" placeholder="description">
             <span style="white-space:nowrap">
               <button type="button" class="iconbtn" data-lping="${ci}.${li}" title="Test de statut : ${l.noPing ? 'désactivé' : (l.pingUrl ? 'URL ' + esc(l.pingUrl) : 'sur le lien')}">${l.noPing ? '○' : '●'}</button>
@@ -1016,6 +1255,16 @@ function widgetForm(orig) {
       </div>`).join('') + '<button type="button" class="btn sm" data-cadd>＋ Catégorie</button>';
   };
   drawBm();
+  // aperçu de l'icône mis à jour pendant la saisie
+  let prevT = null;
+  bmEl?.addEventListener('input', e => {
+    const row = e.target.closest('.link-row');
+    if (!row || !['icon', 'name', 'url'].includes(e.target.dataset.k)) return;
+    clearTimeout(prevT);
+    prevT = setTimeout(() => {
+      $('.ico-prev', row).innerHTML = iconHtml($('[data-k=icon]', row).value, $('[data-k=name]', row).value, $('[data-k=url]', row).value);
+    }, 400);
+  });
   bmEl?.addEventListener('click', e => {
     const b = e.target.closest('button');
     if (!b) return;
