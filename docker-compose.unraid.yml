@@ -1,0 +1,16 @@
+# Déploiement sur un serveur Unraid. Copie le dossier homedash dans /mnt/user/appdata/homedash-src
+# puis : docker compose -f docker-compose.unraid.yml up -d --build
+services:
+  homedash:
+    build: .
+    image: homedash:local
+    container_name: homedash
+    restart: unless-stopped
+    user: "99:100"            # nobody:users, propriétaire habituel de appdata sur Unraid
+    ports:
+      - "3080:3080"
+    environment:
+      - TZ=Europe/Paris
+      # - SECRET_KEY=une-longue-phrase-secrete   # sinon une clé est générée dans /data/.secret_key
+    volumes:
+      - /mnt/user/appdata/homedash:/data

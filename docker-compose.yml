@@ -1,0 +1,18 @@
+# Test sur ton PC : docker compose up -d   puis   http://localhost:3080
+# DEMO=1 ne sert qu'au tout premier lancement (base vide) : il crée des onglets de démonstration.
+services:
+  homedash:
+    build: .
+    image: homedash:local
+    container_name: homedash
+    restart: unless-stopped
+    ports:
+      - "3080:3080"
+    environment:
+      - DEMO=1
+      - TZ=Europe/Paris
+    volumes:
+      - homedash-data:/data
+
+volumes:
+  homedash-data:

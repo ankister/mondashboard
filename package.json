@@ -1,0 +1,18 @@
+{
+  "name": "homedash",
+  "version": "1.0.0",
+  "description": "Dashboard homelab modulaire : serveurs, Docker, médias, torrents, calendrier, RSS, favoris",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "demo": "DEMO=1 node server.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "express": "^4.21.2",
+    "fast-xml-parser": "^4.5.1",
+    "node-ical": "^0.20.1",
+    "undici": "^6.21.0"
+  }
+}
