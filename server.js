@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { load, save, isFresh, id, encrypt, decrypt, getIntegration, findWidget } from './lib/store.js';
 import { setup, login, logout, changePassword, currentUser, requireAdmin, requireView } from './lib/auth.js';
 import { INTEGRATIONS, WIDGETS, publicMeta } from './lib/integrations/index.js';
@@ -12,6 +13,9 @@ import { agentRoutes } from './lib/agentSetup.js';
 import { lastSeen } from './lib/integrations/agent.js';
 
 const PORT = Number(process.env.PORT || 3080);
+const PKG = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
+// APP_VERSION est fourni par l'image Docker (identifiant du commit GitHub)
+const APP_VERSION = `${PKG.version}${process.env.APP_VERSION ? '-' + String(process.env.APP_VERSION).slice(0, 7) : ''}`;
 const fresh = isFresh();
 load();
 if (fresh) { seed(process.env.DEMO === '1'); save(); }
@@ -36,7 +40,7 @@ const bad = (msg, status = 400) => Object.assign(new Error(msg), { status });
 // ---------- Session ----------
 app.get('/api/session', (req, res) => {
   const st = load();
-  res.json({ setupNeeded: !st.auth, user: currentUser(req), publicView: !!st.settings.publicView, title: st.settings.title });
+  res.json({ setupNeeded: !st.auth, user: currentUser(req), publicView: !!st.settings.publicView, title: st.settings.title, version: APP_VERSION });
 });
 app.post('/api/setup', setup);
 app.post('/api/login', login);
@@ -290,9 +294,18 @@ agentRoutes(app, { requireAdmin, wrap, bad });
 
 // ---------- Frontend ----------
 app.use('/vendor/gridstack', express.static(path.resolve('node_modules/gridstack/dist'), { maxAge: '7d' }));
-app.use(express.static(path.resolve('public'), { index: 'index.html', maxAge: '1h' }));
-app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.resolve('public/index.html')));
+// Interface : toujours revalidée (ETag), et index.html versionné pour forcer le rechargement après une mise à jour
+app.use(express.static(path.resolve('public'), {
+  index: false,
+  setHeaders: res => res.setHeader('Cache-Control', 'no-cache')
+}));
+const INDEX_HTML = fs.readFileSync(path.resolve('public/index.html'), 'utf8')
+  .replace(/(href|src)="\/(app\.js|style\.css)"/g, `$1="/$2?v=${encodeURIComponent(APP_VERSION)}"`);
+app.get(/^\/(?!api\/).*/, (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('html').send(INDEX_HTML);
+});
 
 app.listen(PORT, () => {
-  console.log(`Mon dashboard démarré sur http://localhost:${PORT}${fresh && process.env.DEMO === '1' ? ' (contenu de démo créé)' : ''}`);
+  console.log(`Mon dashboard ${APP_VERSION} démarré sur http://localhost:${PORT}${fresh && process.env.DEMO === '1' ? ' (contenu de démo créé)' : ''}`);
 });

@@ -566,6 +566,12 @@ function rssObserve(w, el, list) {
   list.onclick = e => {
     const a = e.target.closest('.rss-item');
     if (!a || e.ctrlKey || e.metaKey || e.button === 1) return; // Ctrl+clic : nouvel onglet
+    if (w.config?.openInPage === false) {
+      // ouverture dans un nouvel onglet : l'article est quand même marqué lu
+      const it = st.items[Number(a.dataset.k)];
+      if (it && canEdit()) rssMarkRead(w, el, [it]);
+      return;
+    }
     e.preventDefault();
     const it = st.items[Number(a.dataset.k)];
     rssReader(w, el, it);
@@ -1505,6 +1511,7 @@ function adminSettings(box) {
       <label>Durée de session (heures)<input type="number" name="sessionHours" min="1" value="${st.sessionHours || 168}"></label>
       <div style="display:flex;justify-content:flex-end"><button class="btn primary">Enregistrer</button></div>
     </form>
+    <div class="muted small" style="margin-top:14px">Version : <b class="mono">${esc(S.session.version || '?')}</b></div>
     <div class="section-lbl" style="margin-top:22px">Mot de passe</div>
     <form class="form" id="pwForm"><div class="row2">
       <label>Actuel<input type="password" name="current" autocomplete="current-password"></label>
