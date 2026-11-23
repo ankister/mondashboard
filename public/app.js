@@ -173,7 +173,13 @@ function dateLine() {
   return `${s.charAt(0).toUpperCase() + s.slice(1)} · ${d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
 }
 
+// téléphone : même seuil que la grille à une colonne
+const MOBILE = window.matchMedia('(max-width: 759px)');
+const shown = w => S.edit || !(w.hideMobile && MOBILE.matches);
+let mobileWatch = false;
+
 function renderApp() {
+  if (!mobileWatch) { mobileWatch = true; MOBILE.addEventListener('change', () => { if (!S.edit && S.dash) renderApp(); }); }
   stopTimers();
   const st = S.dash.settings;
   const p = page();
@@ -200,13 +206,13 @@ function renderApp() {
       ${S.edit ? '<button class="tab tab-add" data-act="add-tab">＋ Onglet</button>' : ''}
     </nav>
     <main>
-      ${p ? `<div class="grid-stack" id="grid">${p.widgets.map(widgetShell).join('')}</div>` : '<div class="empty">Aucun onglet. Passe en mode « Modifier » pour en créer un.</div>'}
+      ${p ? `<div class="grid-stack" id="grid">${p.widgets.filter(shown).map(widgetShell).join('')}</div>` : '<div class="empty">Aucun onglet. Passe en mode « Modifier » pour en créer un.</div>'}
       ${S.edit && p ? '<button class="add-widget" data-act="add-widget">＋ Ajouter un widget</button>' : ''}
       ${!S.edit && p && !p.widgets.length ? `<div class="empty">Onglet vide.${canEdit() ? ' Clique sur « Modifier » pour ajouter des widgets.' : ''}</div>` : ''}
     </main>
   </div>`;
   bindApp();
-  if (p) { initGrid(p); p.widgets.forEach(startWidget); }
+  if (p) { initGrid(p); p.widgets.filter(shown).forEach(startWidget); }
   S.timers.push(setInterval(() => { const c = $('#clock'); if (c) c.textContent = dateLine(); }, 20000));
 }
 
@@ -232,7 +238,7 @@ function widgetShell(w) {
   <section class="widget ${w.type === 'bookmarks' ? 'bare' : ''} ${h ? 'fixed-h' : ''}" data-wid="${w.id}">
     <div class="w-head">
       ${S.edit ? '<span class="iconbtn handle" title="Glisser pour déplacer">⠿</span>' : ''}
-      <div class="w-title">${esc(w.title)}</div>
+      <div class="w-title">${esc(w.title)}${S.edit && w.hideMobile ? ' <span class="w-badge" title="Masqué sur téléphone">📵 masqué</span>' : ''}</div>
       <div class="w-tools">
         <select data-act="width" title="Largeur">${WIDTHS.map(n => `<option value="${n}" ${n === w.w ? 'selected' : ''}>${n}/12</option>`).join('')}</select>
         <select data-act="height" title="Hauteur (tu peux aussi tirer le coin bas-droit)">${heightOptions(h)}</select>
@@ -1298,6 +1304,7 @@ function widgetForm(orig) {
         <label>Hauteur en px (0 = automatique)<input type="number" name="h" min="0" step="10" value="${Number(w.h) || 0}"></label>
         ${orig.id ? `<label>Onglet<select name="tab">${S.dash.pages.map(pg => `<option value="${pg.id}" ${pg.id === page().id ? 'selected' : ''}>${esc(pg.icon || '')} ${esc(pg.name)}</option>`).join('')}</select></label>` : '<div></div>'}
       </div>
+      <label class="chk"><input type="checkbox" name="hideMobile" ${w.hideMobile ? 'checked' : ''}> Masquer sur téléphone (écran de moins de 760 px)</label>
       ${intField}
       ${(d.options || []).map(o => optionField(o, w.config?.[o.key])).join('')}
       ${w.type === 'bookmarks' ? '<div class="section-lbl">Catégories et liens</div><div id="bmEditor"></div><div class="help">Icône : nom du catalogue <a href="https://dashboardicons.com" target="_blank" rel="noopener" style="color:var(--accent)">dashboardicons.com</a> (ex. <span class="mono">plex</span>, <span class="mono">uptime-kuma</span>), une URL d\'image ou un emoji. Laisse vide pour essayer le nom du service puis l\'icône du site. « URL de test » permet de vérifier une adresse interne différente du lien.</div>' : ''}
@@ -1400,6 +1407,7 @@ function widgetForm(orig) {
     w.w = Number(fd.get('w'));
     w.refresh = Math.max(3, Number(fd.get('refresh')) || d.refresh);
     w.h = Math.max(0, Number(fd.get('h')) || 0);
+    w.hideMobile = fd.get('hideMobile') === 'on';
     w.integrations = d.integrations ? fd.getAll('int') : [];
     w.config = w.config || {};
     for (const o of d.options || []) {

@@ -79,6 +79,7 @@ function cleanPages(pages) {
         ...(Number.isInteger(w.x) && Number.isInteger(w.y) ? { x: Math.min(11, Math.max(0, w.x)), y: Math.max(0, w.y) } : {}),
         h: Math.min(3000, Math.max(0, Math.round(Number(w.h) || 0))),
         refresh: Math.max(3, Number(w.refresh) || WIDGETS[w.type].refresh),
+        ...(w.hideMobile ? { hideMobile: true } : {}),
         integrations: (w.integrations || []).filter(x => ints.has(x)),
         config: cfg
       };
