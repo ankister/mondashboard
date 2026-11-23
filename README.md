@@ -104,8 +104,8 @@ L'intégration Glances reste disponible si tu as déjà Glances quelque part, ma
 | **Jellyfin** | Tableau de bord → Clés API → ＋ |
 | **qBittorrentVPN** | Identifiants de la WebUI (port 8080 par défaut chez binhex) |
 | **FreshRSS** | Configuration → Authentification → autoriser l'API ; puis Profil → « Mot de passe API » |
-| **Nextcloud (CalDAV)** | URL `https://cloud…/remote.php/dav/calendars/UTILISATEUR/personal/` et un **mot de passe d'application** |
-| **Infomaniak (CalDAV)** | URL CalDAV du calendrier (copiée depuis les paramètres du calendrier) et ton mot de passe. Le mode « .ics » marche aussi avec un lien d'abonnement. |
+| **Nextcloud (CalDAV)** | Adresse de ton Nextcloud (`https://cloud.exemple.fr`) et un **mot de passe d'application** (Paramètres → Sécurité). Tous tes calendriers sont trouvés automatiquement, avec leurs couleurs ; tu peux n'en garder que certains. |
+| **Infomaniak (CalDAV)** | Adresse CalDAV indiquée dans les paramètres du calendrier, et ton mot de passe. Le mode « .ics » marche aussi avec un lien d'abonnement. |
 | **Home Assistant** | Profil → Sécurité → Jeton d'accès longue durée ; ajoute l'intégration « System Monitor » pour CPU et RAM |
 | **Météo** | Open-Meteo, sans clé. Recherche la ville dans la configuration du widget. |
 
