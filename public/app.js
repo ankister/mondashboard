@@ -536,7 +536,7 @@ function updItem(u, w, d) {
   let act = '';
   if (busy) act = `<span class="upd-busy">⏳ installation${u.percent != null ? ` ${Math.round(u.percent)} %` : '…'}</span>`;
   else if (u.entity && u.canInstall && canEdit()) act = `<button type="button" class="btn sm upd-btn" data-upd="ask" data-entity="${esc(u.entity)}">Installer</button>`;
-  const ask = !busy && S.updAsk?.[w.id] === u.entity ? `<div class="upd-ask">
+  const ask = !busy && u.entity && u.canInstall && S.updAsk?.[w.id] === u.entity ? `<div class="upd-ask">
       <span>Installer ${esc(u.name)} ${esc(u.to || '')} ?</span>
       ${u.canBackup ? `<button type="button" class="btn sm primary" data-upd="backup" data-entity="${esc(u.entity)}" data-int="${esc(d.integrationId || '')}">Avec sauvegarde</button>` : ''}
       <button type="button" class="btn sm ${u.canBackup ? '' : 'primary'}" data-upd="install" data-entity="${esc(u.entity)}" data-int="${esc(d.integrationId || '')}">${u.canBackup ? 'Sans sauvegarde' : 'Installer'}</button>
@@ -993,7 +993,7 @@ const RENDER = {
       <form class="add-row" data-add>
         <input class="input" name="magnet" placeholder="Lien magnet ou URL .torrent…">
         <label class="btn" title="Envoyer un fichier .torrent">📎<input type="file" accept=".torrent,application/x-bittorrent" hidden name="file"></label>
-        <button class="btn primary" type="submit">Ajouter</button>
+        <button class="btn primary add-plus" type="submit" title="Ajouter le torrent" aria-label="Ajouter le torrent"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
       </form>` : ''),
     bind(w, el) {
       S.tor ||= {};
