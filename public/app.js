@@ -471,9 +471,13 @@ function paintWidget(w, data) {
   const html = RENDER[w.type].dyn(data, w, el);
   if (html !== undefined) {
     // garde ouverts les volets dépliés (mises à jour, stockage…) d'un rafraîchissement à l'autre
-    const opened = $$('details', dyn).map(x => x.open);
+    // repérés par leur classe + rang, pour qu'un volet qui apparaît ne décale pas les autres
+    const k = x => x.dataset.k || x.className;
+    const key = (x, i, all) => k(x) + '#' + all.slice(0, i).filter(o => k(o) === k(x)).length;
+    const was = $$('details', dyn), opened = new Set(was.filter(x => x.open).map((x, i) => key(x, was.indexOf(x), was)));
     dyn.innerHTML = html + errorsHtml(data.errors);
-    $$('details', dyn).forEach((x, i) => { if (opened[i]) x.open = true; });
+    const now = $$('details', dyn);
+    now.forEach((x, i) => { if (opened.has(key(x, i, now))) x.open = true; });
   }
   fitWidget(w.id);
 }
@@ -571,6 +575,46 @@ function calMonth(evs, st) {
     </div>`;
 }
 
+// ---------- mises à jour apt (agent Mon dashboard) ----------
+function aptBar(d, w) {
+  const a = d.apt;
+  if (!canEdit() || !a.total) return '';
+  if (a.old) return '<div class="muted small upd-all-bar">Mets à jour le conteneur de l\'agent pour lancer apt depuis ici.</div>';
+  if (!a.can) return '<div class="muted small upd-all-bar">Pour installer depuis ici : Administration → Intégrations → cet agent → cocher « Autoriser les mises à jour du système (apt) ».</div>';
+  if (a.job && !a.job.finishedAt) return '';
+  if (S.aptAsk?.[w.id]) {
+    const sec = S.aptAsk[w.id] === 'security';
+    return `<div class="upd-ask upd-all">
+      <span>${sec ? `Installer les ${a.security} mise(s) à jour de sécurité` : `Installer les ${a.total} mise(s) à jour (apt upgrade)`} sur ${esc(d.name || 'cette machine')} ?</span>
+      <div class="help" style="flex:1 1 100%">apt s'exécute sur la machine ; les paquets bloqués (hold) ne bougent pas. Les fichiers de configuration modifiés sont conservés. Un redémarrage peut être demandé ensuite (noyau…).</div>
+      <button type="button" class="btn sm primary" data-upd="apt-go" data-apt="${sec ? 'security' : 'upgrade'}" data-int="${esc(d.integrationId || '')}">Lancer</button>
+      <button type="button" class="btn sm" data-upd="apt-cancel">Annuler</button>
+    </div>`;
+  }
+  return `<div class="upd-all-bar">
+    ${a.security ? `<button type="button" class="btn sm" data-upd="apt-ask" data-apt="security">🔒 Sécurité (${a.security})</button>` : ''}
+    <button type="button" class="btn sm" data-upd="apt-ask" data-apt="upgrade">⬆ Tout mettre à jour (${a.total})</button></div>`;
+}
+function aptJobBox(d) {
+  const j = d.apt?.job;
+  let out = '';
+  if (j) {
+    const running = !j.finishedAt;
+    const recent = running || Date.now() - Date.parse(j.finishedAt) < 30 * 60e3;
+    if (recent) {
+      const ok = j.code === 0;
+      const what = j.op === 'upgrade' ? 'toutes les mises à jour' : j.op === 'security' ? 'mises à jour de sécurité' : `${j.packages.length} paquet(s)`;
+      const last = (j.log || []).slice(-1)[0] || '';
+      out += `<details data-k="apt-job" class="upd apt-job ${running ? 'run' : ok ? 'ok' : 'ko'}">
+        <summary>${running ? `⏳ apt en cours (${esc(what)})…` : ok ? `✓ apt terminé (${esc(what)})` : `✗ apt a échoué (code ${esc(String(j.code))})`}
+          ${running && last ? `<span class="muted small apt-last">${esc(last)}</span>` : ''}</summary>
+        <pre class="apt-log">${esc((j.log || []).join('\n'))}</pre></details>`;
+    }
+  }
+  if (d.apt?.reboot) out += '<div class="w-warn">⟳ Redémarrage de la machine nécessaire pour finir les mises à jour</div>';
+  return out;
+}
+
 // ---------- mises à jour (widget Machine) ----------
 // HA Core / OS / Supervisor redémarrent Home Assistant : on les installe en dernier
 const isHaSelf = u => /^update\.home_assistant_/.test(u.entity || '');
@@ -595,7 +639,9 @@ function updItem(u, w, d) {
   const ver = `<span class="muted">${esc(u.from || '')} → ${esc(u.to || '')}</span>`;
   const name = u.url && /^https?:\/\//.test(u.url) ? `<a href="${esc(u.url)}" target="_blank" rel="noopener" title="Notes de version">${esc(u.name)}</a>` : esc(u.name);
   // installation en cours (signalée par HA, ou lancée il y a moins de 20 s)
-  const busy = u.inProgress || (S.updBusy?.[u.entity] && Date.now() - S.updBusy[u.entity] < 20000);
+  const job = d.apt?.job && !d.apt.job.finishedAt ? d.apt.job : null;
+  const inJob = job && u.entity?.startsWith('apt:') && (job.op === 'upgrade' || job.packages.includes(u.entity.slice(4)));
+  const busy = inJob || u.inProgress || (S.updBusy?.[u.entity] && Date.now() - S.updBusy[u.entity] < 20000);
   let act = '';
   if (busy) act = `<span class="upd-busy">⏳ installation${u.percent != null ? ` ${Math.round(u.percent)} %` : '…'}</span>`;
   else if (u.entity && u.canInstall && canEdit()) act = `<button type="button" class="btn sm upd-btn" data-upd="ask" data-entity="${esc(u.entity)}">Installer</button>`;
@@ -603,7 +649,7 @@ function updItem(u, w, d) {
       <span>Installer ${esc(u.name)} ${esc(u.to || '')} ?</span>
       ${u.canBackup ? `<button type="button" class="btn sm primary" data-upd="backup" data-entity="${esc(u.entity)}" data-int="${esc(d.integrationId || '')}">Avec sauvegarde</button>` : ''}
       <button type="button" class="btn sm ${u.canBackup ? '' : 'primary'}" data-upd="install" data-entity="${esc(u.entity)}" data-int="${esc(d.integrationId || '')}">${u.canBackup ? 'Sans sauvegarde' : 'Installer'}</button>
-      <button type="button" class="btn sm" data-upd="skip" data-entity="${esc(u.entity)}" data-int="${esc(d.integrationId || '')}" title="Ne plus proposer cette version">Ignorer cette version</button>
+      ${u.canSkip === false ? '' : `<button type="button" class="btn sm" data-upd="skip" data-entity="${esc(u.entity)}" data-int="${esc(d.integrationId || '')}" title="Ne plus proposer cette version">Ignorer cette version</button>`}
       <button type="button" class="btn sm" data-upd="cancel">Annuler</button>
     </div>` : '';
   return `<li class="${act ? 'upd-li' : ''}"><span class="upd-txt">${u.security ? '🔒 ' : ''}${name} ${ver}</span>${act}${ask}</li>`;
@@ -889,6 +935,21 @@ const RENDER = {
         e.preventDefault();
         const ask = (S.updAsk ||= {});
         const op = b.dataset.upd;
+        if (op === 'apt-ask' || op === 'apt-cancel') {
+          (S.aptAsk ||= {})[w.id] = op === 'apt-ask' ? b.dataset.apt : null;
+          if (S.cache[w.id]) paintWidget(w, S.cache[w.id]);
+          return;
+        }
+        if (op === 'apt-go') {
+          S.aptAsk[w.id] = null;
+          $$('[data-upd]', el).forEach(x => { x.disabled = true; });
+          try {
+            const r = await api(`/widgets/${pageOf(w)}/${w.id}/action`, { method: 'POST', body: { op: 'apt', aptOp: b.dataset.apt, integrationId: b.dataset.int || undefined } });
+            toast(r.queued ? 'Mise à jour envoyée : l\'agent la lancera à son prochain contact' : 'Mise à jour apt lancée ✓');
+          } catch (err) { toast(err.message, true); }
+          setTimeout(() => loadWidget(w), 1500);
+          return;
+        }
         if (op === 'all-ask' || op === 'all-cancel') {
           (S.updAllAsk ||= {})[w.id] = op === 'all-ask';
           ask[w.id] = null;
@@ -962,8 +1023,9 @@ const RENDER = {
       const sec = (d.updates || []).filter(u => u.security).length;
       let upd = d.updates?.length ? `
         <details class="upd"><summary>${d.updates.length} mise(s) à jour disponible(s)${sec ? ` <span class="chip fail" style="margin-left:4px">🔒 ${sec} sécurité</span>` : ''}</summary>
-        ${updAll(d, w)}<ul>${d.updates.map(u => updItem(u, w, d)).join('')}</ul></details>`
+        ${d.apt ? aptBar(d, w) : updAll(d, w)}<ul>${d.updates.map(u => updItem(u, w, d)).join('')}</ul></details>`
         : (d.updates ? '<div class="muted small" style="margin-top:10px">✓ Système à jour</div>' : '');
+      upd = aptJobBox(d) + upd;
       if (d.imageUpdates) upd += `<div class="w-warn">⬆ ${d.imageUpdates} conteneur(s) avec une image plus récente disponible</div>`;
       if ((d.fs || []).length > 2) {
         upd += `<details class="upd store"><summary>Stockage (${d.fs.length} volumes)</summary>${d.fs.map(f => bar(f.mount.length > 12 ? '…' + f.mount.slice(-11) : f.mount, f.percent, `${fmtBytes(f.used)} / ${fmtBytes(f.total)}`)).join('')}</details>`;

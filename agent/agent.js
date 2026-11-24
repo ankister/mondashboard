@@ -10,9 +10,9 @@ const os = require('node:os');
 const http = require('node:http');
 const zlib = require('node:zlib');
 const crypto = require('node:crypto');
-const { execFile } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const env = (k, d) => (process.env[k] === undefined || process.env[k] === '' ? d : process.env[k]);
 const CFG = {
   token: env('HD_TOKEN', ''),
@@ -23,6 +23,8 @@ const CFG = {
   insecure: env('HD_INSECURE', '0') === '1',
   root: env('HD_HOST_ROOT', '/host'),
   allowActions: env('HD_ALLOW_DOCKER_ACTIONS', '1') === '1',
+  // mises à jour apt lancées depuis Mon dashboard (désactivables ici, et à autoriser aussi dans l'intégration)
+  allowSystem: env('HD_ALLOW_SYSTEM_UPDATES', '1') === '1',
   pushInterval: Number(env('HD_PUSH_INTERVAL', 10)),
   smartInterval: Number(env('HD_SMART_INTERVAL', 600)),
   updatesInterval: Number(env('HD_UPDATES_INTERVAL', 3600)),
@@ -329,6 +331,46 @@ async function aptUpdates() {
   return ups.sort((a, b) => b.security - a.security || a.name.localeCompare(b.name));
 }
 
+// ---------------------------------------------------------------- mises à jour apt (Debian / Ubuntu)
+// L'agent tourne avec --pid host --privileged : nsenter entre dans les espaces de noms de l'hôte
+// (PID 1), apt s'exécute donc sur la machine elle-même, pas dans le conteneur.
+let aptJob = null; // { op, packages, startedAt, finishedAt, code, log: [] }
+const PKG = /^[a-z0-9][a-z0-9+.-]*(:[a-z0-9]+)?$/;
+function aptStart(op, packages = []) {
+  if (!CFG.allowSystem) throw new Error('Mises à jour système désactivées sur cet agent (HD_ALLOW_SYSTEM_UPDATES=0)');
+  if (state.apt === null) throw new Error('Pas de gestionnaire apt sur cette machine');
+  if (aptJob && !aptJob.finishedAt) throw new Error('Une mise à jour apt est déjà en cours');
+  let pkgs = [];
+  if (op === 'security') pkgs = (state.apt || []).filter(u => u.security && !u.held).map(u => u.name);
+  else if (op === 'install') pkgs = packages.filter(x => PKG.test(x));
+  else if (op !== 'upgrade') throw new Error('Opération apt inconnue');
+  if (op !== 'upgrade' && !pkgs.length) throw new Error('Aucun paquet à mettre à jour');
+  const opts = '-y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold';
+  const cmd = `export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a; apt-get update -q && ` +
+    (op === 'upgrade' ? `apt-get ${opts} --with-new-pkgs upgrade` : `apt-get ${opts} install --only-upgrade ${pkgs.join(' ')}`);
+  const job = { op, packages: pkgs, startedAt: new Date().toISOString(), finishedAt: null, code: null, log: [] };
+  aptJob = job;
+  const push = chunk => {
+    for (const line of String(chunk).split(/\r?\n/)) if (line.trim()) job.log.push(line.slice(0, 300));
+    if (job.log.length > 80) job.log.splice(0, job.log.length - 80);
+  };
+  log('apt', op, pkgs.join(' '));
+  const child = spawn('nsenter', ['-t', '1', '-m', '-u', '-i', '-n', '-p', '--', 'sh', '-c', cmd], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const killer = setTimeout(() => child.kill('SIGTERM'), 3600e3);
+  child.stdout.on('data', push);
+  child.stderr.on('data', push);
+  const done = code => {
+    if (job.finishedAt) return;
+    clearTimeout(killer);
+    job.code = code; job.finishedAt = new Date().toISOString();
+    log('apt terminé, code', code);
+    checkUpdates().catch(() => {});
+  };
+  child.on('error', e => { push(e.code === 'ENOENT' ? 'nsenter introuvable dans le conteneur de l\'agent' : e.message); done('ERR'); });
+  child.on('close', code => done(code));
+  return { ok: true, started: true, packages: pkgs.length };
+}
+
 // ---------------------------------------------------------------- Unraid (plugins / OS)
 async function plgVersion(file) {
   const t = await read(file);
@@ -470,6 +512,8 @@ async function report() {
     mem: m.mem, swap: m.swap, net: state.net, temps: t, gpus: state.gpus,
     fs: fsys, disks: state.disks, smartAt: state.smartAt, smartAvailable: state.disks !== null,
     updates: { apt: state.apt, unraid: state.unraidPlugins, checkedAt: state.updatesAt },
+    aptJob, canSystem: CFG.allowSystem && state.apt !== null,
+    rebootRequired: exists(H('/run/reboot-required')) || exists(H('/var/run/reboot-required')),
     containers: ct.list, dockerError: ct.error || null, imagesAt: state.imagesAt,
     actionsEnabled: CFG.allowActions
   };
@@ -501,6 +545,8 @@ if (CFG.mode === 'pull') {
         const m = req.url.match(/^\/v1\/docker\/([a-f0-9]{12,64})\/(start|stop|restart)$/);
         if (req.method === 'POST' && m) return send(200, await dockerAction(m[1], m[2]));
         if (req.method === 'POST' && req.url === '/v1/refresh') { scanSmart(); checkUpdates(); checkImages(); return send(200, { ok: true }); }
+        const a = req.url.match(/^\/v1\/apt\/(upgrade|security|install)(?:\?pkgs=([^&]*))?$/);
+        if (req.method === 'POST' && a) return send(200, aptStart(a[1], decodeURIComponent(a[2] || '').split(',').filter(Boolean)));
         send(404, { error: 'Inconnu' });
       } catch (e) { send(500, { error: e.message }); }
     });
@@ -526,6 +572,7 @@ if (CFG.mode === 'push') {
       for (const c of r.commands || []) {
         try {
           if (c.op === 'refresh') { scanSmart(); checkUpdates(); checkImages(); results.push({ id: c.id, ok: true }); }
+          else if (c.op === 'apt') { aptStart(c.aptOp, c.packages || []); results.push({ id: c.id, ok: true }); }
           else { await dockerAction(c.containerId, c.op); results.push({ id: c.id, ok: true }); }
         } catch (e) { results.push({ id: c.id, ok: false, error: e.message }); }
       }

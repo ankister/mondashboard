@@ -525,3 +525,11 @@ details.store summary { color: var(--muted); }
   .um-spark, .um-c-sp, .um-c-b { display: none !important; }
   .um-head, .um-row, .widget:not(:has(.um-spark)) .um-head, .widget:not(:has(.um-spark)) .um-row { grid-template-columns: minmax(0, 1fr) 84px 60px; }
 }
+
+/* ---------- apt ---------- */
+.apt-job summary { color: var(--accent); }
+.apt-job.ok summary { color: var(--ok); }
+.apt-job.ko summary { color: var(--bad); }
+.apt-last { display: block; margin: 2px 0 0 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, monospace; }
+.apt-log { max-height: 220px; overflow: auto; margin: 6px 0 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; font-size: 11px; line-height: 1.45; white-space: pre-wrap; word-break: break-all; }
+.upd-all-bar { gap: 8px; flex-wrap: wrap; }
