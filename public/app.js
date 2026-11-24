@@ -1215,6 +1215,56 @@ const RENDER = {
     }
   },
 
+  umami: {
+    dyn(d, w) {
+      if (d.empty) return '<div class="empty">Choisis une intégration Umami dans ⚙.</div>';
+      const cfg = w.config || {};
+      let sites = (d.sites || []).slice();
+      if (cfg.hideEmpty) sites = sites.filter(x => x.visitors || x.pageviews);
+      const sort = cfg.sort || 'Visiteurs';
+      sites.sort(sort === 'Nom' ? (a, b) => a.name.localeCompare(b.name, 'fr')
+        : sort === 'Vues' ? (a, b) => b.pageviews - a.pageviews : (a, b) => b.visitors - a.visitors || b.pageviews - a.pageviews);
+      if (!sites.length) return '<div class="empty">Aucun site.</div>';
+      const sum = k => sites.reduce((t, x) => t + (x[k] || 0), 0);
+      const hasPrev = sites.some(x => x.prevVisitors != null);
+      const sumPrev = k => sites.reduce((t, x) => t + (x[k] || 0), 0);
+      const delta = (now, prev) => {
+        if (prev == null) return '';
+        if (!prev) return now ? '<span class="um-d up">nouveau</span>' : '';
+        const p = Math.round(((now - prev) / prev) * 100);
+        return p ? `<span class="um-d ${p > 0 ? 'up' : 'down'}">${p > 0 ? '▲' : '▼'} ${Math.abs(p)} %</span>` : '<span class="um-d">=</span>';
+      };
+      const n = v => Number(v || 0).toLocaleString('fr-FR');
+      const dur = s => s == null ? '–' : s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')}`;
+      const spark = arr => {
+        if (!arr || arr.length < 2) return '<span class="um-spark"></span>';
+        const max = Math.max(1, ...arr), W = 100, H = 26;
+        const pts = arr.map((v, i) => `${(i / (arr.length - 1) * W).toFixed(1)},${(H - 1 - v / max * (H - 3)).toFixed(1)}`);
+        return `<svg class="um-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polygon points="0,${H} ${pts.join(' ')} ${W},${H}" fill="var(--accent-soft)"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`;
+      };
+      const hue = str => [...str].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 360, 7);
+      const online = sites.reduce((t, x) => t + (x.active || 0), 0);
+      return `
+        <div class="um-sum">
+          <div><b>${n(sum('visitors'))}</b><span>visiteurs ${hasPrev ? delta(sum('visitors'), sumPrev('prevVisitors')) : ''}</span></div>
+          <div><b>${n(sum('pageviews'))}</b><span>vues ${hasPrev ? delta(sum('pageviews'), sumPrev('prevPageviews')) : ''}</span></div>
+          ${cfg.showActive !== false ? `<div><b class="um-live">${online ? '<i></i>' : ''}${n(online)}</b><span>en ligne</span></div>` : ''}
+          <div class="um-per muted small">${esc((d.period || '24 heures').toLowerCase())} · ${sites.length} site(s)</div>
+        </div>
+        <div class="um-head"><span>Site</span>${cfg.showChart !== false ? '<span class="um-c-sp">Vues</span>' : ''}<span class="num">Visiteurs</span><span class="num">Vues</span><span class="num um-c-b">Rebond</span></div>
+        <div class="um-list">${sites.map(x => `
+          <a class="um-row" href="${esc(x.link)}" target="_blank" rel="noopener" title="Visites : ${n(x.visits)} · durée moyenne : ${dur(x.avgTime)}${x.error ? ' · ' + esc(x.error) : ''}">
+            <span class="um-site">
+              <span class="um-ava" style="background:hsl(${hue(x.domain || x.name)} 55% 45%)">${esc((x.name || '?').trim()[0]?.toUpperCase() || '?')}</span>
+              <span class="um-nm"><b>${esc(x.name)}</b>${x.active ? `<span class="um-on" title="${x.active} visiteur(s) en ce moment"><i></i>${x.active}</span>` : ''}<small>${esc(x.domain)}</small></span>
+            </span>
+            ${cfg.showChart !== false ? spark(x.series) : ''}
+            <span class="num"><b>${n(x.visitors)}</b>${delta(x.visitors, x.prevVisitors)}</span>
+            <span class="num">${n(x.pageviews)}</span>
+            <span class="num um-c-b">${x.bounce == null ? '–' : x.bounce + ' %'}</span>
+          </a>`).join('')}</div>`;
+    }
+  },
   title: {
     static: w => {
       const c = { size: 'Moyenne', align: 'Gauche', line: true, ...(w.config || {}) };

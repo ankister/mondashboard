@@ -248,6 +248,7 @@ async function widgetData(w) {
       if (kind === 'machine' || kind === 'torrents') return { ...(results[0] || {}), errors, offline: !results.length };
       if (kind === 'docker') return { containers: results.flatMap(r => r.containers), errors };
       if (kind === 'media') return { sessions: results.flatMap(r => r.sessions), errors };
+      if (kind === 'analytics') return { sites: results.flatMap(r => r.sites), period: results[0]?.period, errors };
       if (kind === 'calendar') {
         return { events: results.flatMap(r => r.events).sort((a, b) => a.start.localeCompare(b.start)), errors };
       }
