@@ -11,6 +11,7 @@ import { ping } from './lib/http.js';
 import { seed } from './lib/seed.js';
 import { agentRoutes } from './lib/agentSetup.js';
 import { lastSeen } from './lib/integrations/agent.js';
+import { cleanTheme, themeCss, themeMeta } from './lib/themes.js';
 
 const PORT = Number(process.env.PORT || 3080);
 const PKG = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
@@ -40,7 +41,12 @@ const bad = (msg, status = 400) => Object.assign(new Error(msg), { status });
 // ---------- Session ----------
 app.get('/api/session', (req, res) => {
   const st = load();
-  res.json({ setupNeeded: !st.auth, user: currentUser(req), publicView: !!st.settings.publicView, title: st.settings.title, version: APP_VERSION });
+  res.json({ setupNeeded: !st.auth, user: currentUser(req), publicView: !!st.settings.publicView, title: st.settings.title, version: APP_VERSION, themeMode: cleanTheme(st.settings.theme).mode });
+});
+// feuille de style du thème (publique : la page de connexion en a besoin aussi)
+app.get('/theme.css', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache');
+  res.type('css').send(themeCss(load().settings.theme));
 });
 app.post('/api/setup', setup);
 app.post('/api/login', login);
@@ -97,18 +103,19 @@ app.put('/api/pages', requireAdmin, wrap(req => {
 
 app.put('/api/settings', requireAdmin, wrap(req => {
   const st = load();
-  const { title, publicView, greeting, sessionHours, rememberDays } = req.body || {};
+  const { title, publicView, greeting, sessionHours, rememberDays, theme } = req.body || {};
   if (title !== undefined) st.settings.title = String(title).slice(0, 40) || 'Mon dashboard';
   if (publicView !== undefined) st.settings.publicView = !!publicView;
   if (greeting !== undefined) st.settings.greeting = !!greeting;
   if (sessionHours !== undefined) st.settings.sessionHours = Math.min(8760, Math.max(1, Number(sessionHours) || 168));
+  if (theme !== undefined) st.settings.theme = cleanTheme(theme);
   if (rememberDays !== undefined) st.settings.rememberDays = Math.min(365, Math.max(1, Number(rememberDays) || 30));
   save();
   return { settings: st.settings };
 }));
 
 // ---------- Intégrations ----------
-app.get('/api/meta', requireAdmin, (req, res) => res.json(publicMeta()));
+app.get('/api/meta', requireAdmin, (req, res) => res.json({ ...publicMeta(), themes: themeMeta() }));
 
 const publicIntegration = it => {
   const def = INTEGRATIONS[it.type];
@@ -302,7 +309,7 @@ app.use(express.static(path.resolve('public'), {
   setHeaders: res => res.setHeader('Cache-Control', 'no-cache')
 }));
 const INDEX_HTML = fs.readFileSync(path.resolve('public/index.html'), 'utf8')
-  .replace(/(href|src)="\/(app\.js|style\.css)"/g, `$1="/$2?v=${encodeURIComponent(APP_VERSION)}"`);
+  .replace(/(href|src)="\/(app\.js|style\.css|theme\.css)"/g, `$1="/$2?v=${encodeURIComponent(APP_VERSION)}"`);
 app.get(/^\/(?!api\/).*/, (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.type('html').send(INDEX_HTML);

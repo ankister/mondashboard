@@ -3,11 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#1f252c">
+  <meta name="theme-color" content="#1f252c" id="themeColor">
   <title>Mon dashboard</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏠</text></svg>">
   <link rel="stylesheet" href="/vendor/gridstack/gridstack.min.css">
   <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/theme.css" id="themeCss">
+  <script>
+    // applique le mode clair/sombre avant l'affichage pour éviter un flash
+    (function () {
+      var m = 'auto';
+      try { m = localStorage.getItem('hd_mode') || localStorage.getItem('hd_mode_default') || 'auto'; } catch (e) {}
+      if (m === 'auto') m = window.matchMedia('(prefers-color-scheme: light)').matches ? 'clair' : 'sombre';
+      document.documentElement.className = m === 'clair' ? 'th-light' : 'th-dark';
+    })();
+  </script>
 </head>
 <body>
   <div id="root"></div>

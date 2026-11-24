@@ -118,10 +118,34 @@ async function ensureAdminData() {
 }
 
 // ================= Démarrage / connexion =================
+// ---------- Mode clair / sombre ----------
+// réglage par défaut (Administration → Apparence), remplaçable sur chaque appareil avec le bouton de l'en-tête
+const MODE_ICON = { auto: '🌓', clair: '☀️', sombre: '🌙' };
+const MODE_LABEL = { auto: 'Automatique (suit l\'appareil)', clair: 'Clair', sombre: 'Sombre' };
+const LIGHT_MQ = window.matchMedia('(prefers-color-scheme: light)');
+const deviceMode = () => localStorageGet('hd_mode') || '';
+const currentMode = () => deviceMode() || S.session?.themeMode || 'auto';
+function applyMode() {
+  let m = currentMode();
+  if (m === 'auto') m = LIGHT_MQ.matches ? 'clair' : 'sombre';
+  document.documentElement.className = m === 'clair' ? 'th-light' : 'th-dark';
+  requestAnimationFrame(() => $('#themeColor')?.setAttribute('content', getComputedStyle(document.body).getPropertyValue('--bg').trim() || '#1f252c'));
+}
+LIGHT_MQ.addEventListener('change', applyMode);
+function reloadThemeCss() {
+  const l = $('#themeCss');
+  if (l) l.href = '/theme.css?t=' + Date.now();
+}
+
+// onglet qui contient le widget (et pas l'onglet affiché : une requête différée peut partir après un changement d'onglet)
+const pageOf = w => (S.dash.pages.find(p => p.widgets.some(x => x.id === w.id)) || page()).id;
+
 async function boot() {
   stopTimers();
   S.session = await api('/session');
   document.title = S.session.title || 'Mon dashboard';
+  localStorageSet('hd_mode_default', S.session.themeMode || 'auto');
+  applyMode();
   if (S.session.setupNeeded) return renderAuth('setup');
   try {
     S.dash = await api('/dashboard');
@@ -208,6 +232,7 @@ function renderApp() {
         <h1>${st.greeting !== false ? `${greeting()}${S.session.user ? ` <span class="accent">${esc(S.session.user)}</span>` : ''} !` : esc(st.title)}</h1>
       </div>
       <div class="top-actions">
+        <button class="btn mode-btn" data-act="mode" title="Mode : ${esc(MODE_LABEL[currentMode()])}${deviceMode() ? ' (cet appareil)' : ''} — cliquer pour changer">${MODE_ICON[currentMode()]}</button>
         ${canEdit() ? `
           <button class="btn ${S.edit ? 'on' : ''}" data-act="toggle-edit">${S.edit ? '✓ Terminer' : '✎ Modifier'}</button>
           <button class="btn" data-act="admin">⚙ Administration</button>`
@@ -361,7 +386,7 @@ async function loadWidget(w) {
   const dyn = $('.w-dyn', el);
   try {
     const q = RENDER[w.type]?.query?.(w) || '';
-    const data = await api(`/widgets/${page().id}/${w.id}${q}`);
+    const data = await api(`/widgets/${pageOf(w)}/${w.id}${q}`);
     S.cache[w.id] = data;
     paintWidget(w, data);
   } catch (e) {
@@ -623,7 +648,7 @@ async function rssMore(w, el) {
   const st = RENDER.rss.st(w);
   st.loading = true;
   try {
-    const d = await api(`/widgets/${page().id}/${w.id}?c=${encodeURIComponent(st.cont)}`);
+    const d = await api(`/widgets/${pageOf(w)}/${w.id}?c=${encodeURIComponent(st.cont)}`);
     const add = (d.items || []).filter(i => !st.ids.has(i.id || i.link));
     add.forEach(i => st.ids.add(i.id || i.link));
     st.items.push(...add);
@@ -651,7 +676,7 @@ function rssMarkRead(w, el, items) {
   st.flushT = setTimeout(async () => {
     for (const [integrationId, ids] of st.queue) {
       st.queue.delete(integrationId);
-      try { await api(`/widgets/${page().id}/${w.id}/action`, { method: 'POST', body: { op: 'read', integrationId, ids: [...ids] } }); }
+      try { await api(`/widgets/${pageOf(w)}/${w.id}/action`, { method: 'POST', body: { op: 'read', integrationId, ids: [...ids] } }); }
       catch (e) { toast(`FreshRSS : ${e.message}`, true); }
     }
   }, 1200);
@@ -687,14 +712,14 @@ function tempColor(t) {
   return `rgb(${stops.at(-1)[1]})`;
 }
 function wxIcon(kind, day = true, size = 64) {
-  const cloud = (x = 0, y = 0, s = 1, fill = 'none') => `<path transform="translate(${x} ${y}) scale(${s})" d="M18 46h28a11 11 0 0 0 1-22 15 15 0 0 0-28-4 10 10 0 0 0-1 26z" fill="${fill}" stroke="#e8f1fb" stroke-width="${3 / s}" stroke-linejoin="round"/>`;
+  const cloud = (x = 0, y = 0, s = 1, fill = 'none') => `<path transform="translate(${x} ${y}) scale(${s})" d="M18 46h28a11 11 0 0 0 1-22 15 15 0 0 0-28-4 10 10 0 0 0-1 26z" fill="${fill}" stroke="var(--wx-cloud)" stroke-width="${3 / s}" stroke-linejoin="round"/>`;
   const sun = (x, y, r) => `<g stroke="#ffc94a" stroke-width="2.6" stroke-linecap="round" fill="none"><circle cx="${x}" cy="${y}" r="${r}"/>${[0, 45, 90, 135, 180, 225, 270, 315].map(a => {
     const rad = a * Math.PI / 180, r1 = r + 4, r2 = r + 8;
     return `<line x1="${x + r1 * Math.cos(rad)}" y1="${y + r1 * Math.sin(rad)}" x2="${x + r2 * Math.cos(rad)}" y2="${y + r2 * Math.sin(rad)}"/>`;
   }).join('')}</g>`;
   const moon = (x, y, r) => `<path d="M${x + r * 0.35} ${y - r} a${r} ${r} 0 1 0 ${r * 0.9} ${r * 1.55} a${r * 0.8} ${r * 0.8} 0 0 1 ${-r * 0.9} ${-r * 1.55}z" fill="#7cc4f0"/>`;
   const drops = n => [...Array(n)].map((_, i) => `<line x1="${24 + i * 8}" y1="50" x2="${21 + i * 8}" y2="58" stroke="#5aa9ff" stroke-width="2.6" stroke-linecap="round"/>`).join('');
-  const flakes = `<g fill="#e8f1fb">${[24, 34, 44].map(x => `<circle cx="${x}" cy="54" r="2.2"/>`).join('')}</g>`;
+  const flakes = `<g fill="var(--wx-cloud)">${[24, 34, 44].map(x => `<circle cx="${x}" cy="54" r="2.2"/>`).join('')}</g>`;
   let g;
   switch (kind) {
     case 'clear': g = day ? sun(32, 32, 11) : moon(30, 32, 14); break;
@@ -814,7 +839,7 @@ const RENDER = {
         const st = $('.st-cell', row);
         if (st) st.innerHTML = `<span class="st-restarting">◌ <span class="small">${{ start: 'Démarrage', stop: 'Arrêt', restart: 'Redémarrage' }[b.dataset.op]} en cours…</span></span>`;
         try {
-          await api(`/widgets/${page().id}/${w.id}/action`, { method: 'POST', body: { integrationId: b.dataset.int, containerId: b.dataset.cid, op: b.dataset.op } });
+          await api(`/widgets/${pageOf(w)}/${w.id}/action`, { method: 'POST', body: { integrationId: b.dataset.int, containerId: b.dataset.cid, op: b.dataset.op } });
           toast(`${b.dataset.name} : ${{ start: 'démarré', stop: 'arrêté', restart: 'redémarré' }[b.dataset.op]} ✓`);
         } catch (err) { toast(err.message, true); }
         delete S.cache[w.id];
@@ -883,7 +908,7 @@ const RENDER = {
           e.stopPropagation();
           op.disabled = true;
           try {
-            await api(`/widgets/${page().id}/${w.id}/action`, { method: 'POST', body: { op: op.dataset.torOp, hash: op.dataset.hash, integrationId: op.dataset.int || undefined } });
+            await api(`/widgets/${pageOf(w)}/${w.id}/action`, { method: 'POST', body: { op: op.dataset.torOp, hash: op.dataset.hash, integrationId: op.dataset.int || undefined } });
             toast(op.dataset.torOp === 'pause' ? 'Torrent mis en pause' : 'Torrent repris');
           } catch (err) { toast(err.message, true); }
           setTimeout(() => loadWidget(w), 600);
@@ -897,7 +922,7 @@ const RENDER = {
           if (del.dataset.torDel === 'cancel') { if (S.cache[w.id]) paintWidget(w, S.cache[w.id]); return; }
           $$('[data-tor-del]', el).forEach(b => { b.disabled = true; });
           try {
-            await api(`/widgets/${page().id}/${w.id}/action`, { method: 'POST', body: { op: 'delete', hash: del.dataset.hash, deleteFiles: del.dataset.torDel === 'files', integrationId: del.dataset.int || undefined } });
+            await api(`/widgets/${pageOf(w)}/${w.id}/action`, { method: 'POST', body: { op: 'delete', hash: del.dataset.hash, deleteFiles: del.dataset.torDel === 'files', integrationId: del.dataset.int || undefined } });
             toast(del.dataset.torDel === 'files' ? 'Torrent et fichiers supprimés' : 'Torrent retiré (fichiers conservés)');
             S.tor[w.id] = null;
           } catch (err) { toast(err.message, true); }
@@ -916,7 +941,7 @@ const RENDER = {
       if (!form) return;
       const send = async body => {
         try {
-          await api(`/widgets/${page().id}/${w.id}/action`, { method: 'POST', body: { op: 'add', ...body } });
+          await api(`/widgets/${pageOf(w)}/${w.id}/action`, { method: 'POST', body: { op: 'add', ...body } });
           toast('Torrent ajouté ✓');
           form.reset();
           setTimeout(() => loadWidget(w), 1000);
@@ -1056,7 +1081,7 @@ const RENDER = {
       $('.w-dyn', el).remove();
       const save = async content => {
         try {
-          const r = await api(`/widgets/${page().id}/${w.id}/note`, { method: 'PUT', body: { content } });
+          const r = await api(`/widgets/${pageOf(w)}/${w.id}/note`, { method: 'PUT', body: { content } });
           w.config = { ...(w.config || {}), content, updatedAt: r.updatedAt };
           $('.md', view).innerHTML = content.trim() ? md(content) : '<div class="empty">Note vide. Clique sur ✎ pour écrire.</div>';
           return true;
@@ -1228,6 +1253,17 @@ function bindApp() {
         if (S.edit) await ensureAdminData();
         renderApp(); break;
       case 'admin': openAdmin(); break;
+      case 'mode': {
+        // auto → clair → sombre → auto ; revenir au réglage par défaut efface le choix de l'appareil
+        const order = ['auto', 'clair', 'sombre'];
+        const next = order[(order.indexOf(currentMode()) + 1) % 3];
+        localStorageSet('hd_mode', next === (S.session.themeMode || 'auto') ? '' : next);
+        applyMode();
+        t.innerHTML = MODE_ICON[currentMode()];
+        t.title = `Mode : ${MODE_LABEL[currentMode()]}${deviceMode() ? ' (cet appareil)' : ''} — cliquer pour changer`;
+        toast(`Mode ${MODE_LABEL[currentMode()].toLowerCase()}${deviceMode() ? ' sur cet appareil' : ''}`);
+        break;
+      }
       case 'add-tab': e.stopPropagation(); editTab(null); break;
       case 'edit-tab': e.stopPropagation(); editTab(page()); break;
       case 'add-widget': pickWidgetType(); break;
@@ -1526,13 +1562,78 @@ function widgetForm(orig) {
 // ================= Administration =================
 async function openAdmin(tab = 'int') {
   await ensureAdminData();
-  const m = modal({ title: 'Administration', wide: true, body: '<div class="pills"><button class="btn" data-pill="int">🔌 Intégrations</button><button class="btn" data-pill="set">⚙ Paramètres</button></div><div id="admBody"></div>' });
+  const m = modal({ title: 'Administration', wide: true, body: '<div class="pills"><button class="btn" data-pill="int">🔌 Intégrations</button><button class="btn" data-pill="theme">🎨 Apparence</button><button class="btn" data-pill="set">⚙ Paramètres</button></div><div id="admBody"></div>' });
   const show = t => {
     $$('[data-pill]', m.el).forEach(b => b.classList.toggle('on', b.dataset.pill === t));
-    (t === 'int' ? adminIntegrations : adminSettings)($('#admBody', m.el), m);
+    ({ int: adminIntegrations, theme: adminTheme, set: adminSettings })[t]($('#admBody', m.el), m);
   };
   m.el.addEventListener('click', e => { const p = e.target.closest('[data-pill]'); if (p) show(p.dataset.pill); });
   show(tab);
+}
+
+function adminTheme(box) {
+  const th = { mode: 'auto', dark: 'Ardoise', light: 'Clair', accentDark: '', accentLight: '', css: '', ...(S.dash.settings.theme || {}) };
+  const P = S.meta.themes;
+  const sw = (kind, name, p) => `<button type="button" class="theme-sw ${th[kind] === name ? 'on' : ''}" data-sw="${kind}" data-name="${esc(name)}">
+      <span class="pv" style="background:${p.bg}"><i style="background:${p.card}"></i><i style="background:${p.card}"></i><i style="background:${p.accent};flex:.35"></i></span>
+      <span class="nm">${esc(name)}</span></button>`;
+  const accent = (kind, def) => `<div class="accent-row">
+      <label class="chk" style="margin:0"><input type="checkbox" data-acc-on="${kind}" ${th[kind] ? 'checked' : ''}> Couleur d'accent personnalisée</label>
+      <input type="color" data-acc="${kind}" value="${esc(th[kind] || def)}" ${th[kind] ? '' : 'disabled'}></div>`;
+  box.innerHTML = `
+    <form class="form" id="themeForm">
+      <label>Mode par défaut
+        <select name="mode">${Object.entries(MODE_LABEL).map(([k, v]) => `<option value="${k}" ${th.mode === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
+      <div class="help">Le bouton ${MODE_ICON.auto} de l'en-tête change le mode sur un seul appareil, sans toucher à ce réglage.</div>
+      <div class="section-lbl">Thème sombre</div>
+      <div class="theme-grid">${Object.entries(P.dark).map(([n, p]) => sw('dark', n, p)).join('')}</div>
+      ${accent('accentDark', P.dark[th.dark]?.accent || '#6ee2ff')}
+      <div class="section-lbl">Thème clair</div>
+      <div class="theme-grid">${Object.entries(P.light).map(([n, p]) => sw('light', n, p)).join('')}</div>
+      ${accent('accentLight', P.light[th.light]?.accent || '#0a84c6')}
+      <div class="section-lbl">CSS personnalisé</div>
+      <div class="help">Ce CSS est ajouté après le thème, sur toutes les pages. Variables disponibles :
+        <code>--bg --bg2 --card --card-h --line --text --muted --accent --ok --warn --bad --radius --font</code>.
+        Cible un mode avec <code>:root.th-dark</code> ou <code>:root.th-light</code>.</div>
+      <textarea class="input css-edit" name="css" spellcheck="false" placeholder="/* Exemple */
+:root.th-dark { --bg: #101418; --accent: #ff79c6; }
+.widget { border-radius: 18px; }
+.greet h1 { font-size: 40px; }">${esc(th.css)}</textarea>
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <button class="btn" type="button" data-theme-reset>Thème par défaut</button>
+        <button class="btn primary">Enregistrer</button>
+      </div>
+    </form>`;
+  const f = $('#themeForm', box);
+  f.addEventListener('click', e => {
+    const b = e.target.closest('[data-sw]');
+    if (!b) return;
+    th[b.dataset.sw] = b.dataset.name;
+    $$(`[data-sw="${b.dataset.sw}"]`, f).forEach(x => x.classList.toggle('on', x === b));
+    const kind = b.dataset.sw === 'dark' ? 'accentDark' : 'accentLight';
+    const inp = $(`[data-acc="${kind}"]`, f);
+    if (inp.disabled) inp.value = P[b.dataset.sw][b.dataset.name].accent;
+  });
+  $$('[data-acc-on]', f).forEach(c => c.addEventListener('change', () => { $(`[data-acc="${c.dataset.accOn}"]`, f).disabled = !c.checked; }));
+  const save = async theme => {
+    try {
+      const r = await api('/settings', { method: 'PUT', body: { theme } });
+      S.dash.settings = r.settings;
+      S.session.themeMode = r.settings.theme.mode;
+      localStorageSet('hd_mode_default', S.session.themeMode);
+      reloadThemeCss();
+      applyMode();
+      toast('Apparence enregistrée ✓');
+      renderApp();
+      adminTheme(box);
+    } catch (err) { toast(err.message, true); }
+  };
+  $('[data-theme-reset]', f).onclick = () => { if (confirm('Revenir au thème par défaut ? Le CSS personnalisé sera effacé.')) save({}); };
+  f.onsubmit = e => {
+    e.preventDefault();
+    const acc = k => ($(`[data-acc-on="${k}"]`, f).checked ? $(`[data-acc="${k}"]`, f).value : '');
+    save({ mode: f.mode.value, dark: th.dark, light: th.light, accentDark: acc('accentDark'), accentLight: acc('accentLight'), css: f.css.value });
+  };
 }
 
 function adminIntegrations(box, m) {
