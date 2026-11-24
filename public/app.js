@@ -493,7 +493,7 @@ const ring = (pctv, cls) => {
   const r = 26, c = 2 * Math.PI * r;
   return `<svg class="ring ${cls}" viewBox="0 0 64 64"><circle cx="32" cy="32" r="${r}" class="bg"/><circle cx="32" cy="32" r="${r}" class="fg" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - Math.min(100, pctv) / 100)}"/><text x="32" y="37">${Math.floor(pctv)}%</text></svg>`;
 };
-function torRow(t, open, intId) {
+function torRow(t, open, intId, askDel) {
   const [ico, label, cls] = TOR_STATE[t.state] || ['•', t.state, 'wait'];
   const paused = isPaused(t.state);
   const icoPlay = '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M7 4.5v15l13-7.5z" fill="currentColor"/></svg>';
@@ -525,7 +525,13 @@ function torRow(t, open, intId) {
           <div class="wide"><span>Dossier</span><b class="mono">${esc(t.savePath || '—')}</b></div>
           <div class="wide"><span>Hash</span><b class="mono">${esc(t.hash)}</b></div>
         </div>
-      </div>` : ''}
+      </div>
+      ${canEdit() ? (askDel ? `<div class="tor-del">
+        <span>Supprimer ce torrent ?</span>
+        <button type="button" class="btn sm" data-tor-del="keep" data-hash="${esc(t.hash)}" data-int="${esc(intId || '')}">Garder les fichiers</button>
+        <button type="button" class="btn sm danger" data-tor-del="files" data-hash="${esc(t.hash)}" data-int="${esc(intId || '')}">Supprimer aussi les fichiers</button>
+        <button type="button" class="btn sm" data-tor-del="cancel">Annuler</button>
+      </div>` : `<div class="tor-actions"><button type="button" class="btn sm danger" data-tor-ask="${esc(t.hash)}">🗑 Supprimer</button></div>`) : ''}` : ''}
     </div>`;
 }
 
@@ -883,8 +889,24 @@ const RENDER = {
           setTimeout(() => loadWidget(w), 600);
           return;
         }
+        const ask = e.target.closest('[data-tor-ask]');
+        if (ask) { (S.torDel ||= {})[w.id] = ask.dataset.torAsk; if (S.cache[w.id]) paintWidget(w, S.cache[w.id]); return; }
+        const del = e.target.closest('[data-tor-del]');
+        if (del) {
+          (S.torDel ||= {})[w.id] = null;
+          if (del.dataset.torDel === 'cancel') { if (S.cache[w.id]) paintWidget(w, S.cache[w.id]); return; }
+          $$('[data-tor-del]', el).forEach(b => { b.disabled = true; });
+          try {
+            await api(`/widgets/${page().id}/${w.id}/action`, { method: 'POST', body: { op: 'delete', hash: del.dataset.hash, deleteFiles: del.dataset.torDel === 'files', integrationId: del.dataset.int || undefined } });
+            toast(del.dataset.torDel === 'files' ? 'Torrent et fichiers supprimés' : 'Torrent retiré (fichiers conservés)');
+            S.tor[w.id] = null;
+          } catch (err) { toast(err.message, true); }
+          setTimeout(() => loadWidget(w), 500);
+          return;
+        }
         const row = e.target.closest('[data-tor-toggle]');
         if (row) {
+          (S.torDel ||= {})[w.id] = null;
           const h = row.dataset.torToggle;
           S.tor[w.id] = S.tor[w.id] === h ? null : h;
           if (S.cache[w.id]) paintWidget(w, S.cache[w.id]);
@@ -923,7 +945,7 @@ const RENDER = {
       return `
         <div class="speeds"><span>↓ <b>${fmtSpeed(d.dl)}</b></span><span>↑ <b>${fmtSpeed(d.ul)}</b></span><span class="small">${conn}</span>
           <span class="muted small" style="margin-left:auto">${list.length} torrent(s) · ${active} en cours</span></div>
-        <div class="tor-list">${list.map(t => torRow(t, open === t.hash, d.integrationId)).join('') || '<div class="empty">Aucun torrent</div>'}</div>`;
+        <div class="tor-list">${list.map(t => torRow(t, open === t.hash, d.integrationId, open === t.hash && S.torDel?.[w.id] === t.hash)).join('') || '<div class="empty">Aucun torrent</div>'}</div>`;
     }
   },
 
