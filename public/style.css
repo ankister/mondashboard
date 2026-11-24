@@ -477,3 +477,22 @@ details.store summary { color: var(--muted); }
 .add-row .add-plus { flex: none; width: 44px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .add-row .input { min-width: 0; }
 .add-row label.btn { flex: none; width: 44px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+
+/* ---------- Barre de titre ---------- */
+.title-w .w-body { padding-top: 6px; padding-bottom: 6px; }
+.title-w .w-head { display: none; }
+.editing .title-w .w-head { display: flex; }
+.tbar { padding: 4px 2px; }
+.tbar-line { border-bottom: 2px solid var(--line); padding-bottom: 10px; }
+.tbar-t { font-weight: 650; letter-spacing: .2px; display: inline-flex; align-items: center; gap: 10px; font-size: 22px; }
+.tbar-s { color: var(--muted); margin-top: 4px; font-size: 14px; }
+.tsz-s .tbar-t { font-size: 17px; }
+.tsz-l .tbar-t { font-size: 30px; }
+.tsz-l .tbar-s { font-size: 15px; }
+.tsz-l.tbar-line { border-bottom-width: 3px; }
+
+/* ---------- Placement compact / libre ---------- */
+.place-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 6px; padding: 0 2px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.seg .btn { border: 0; border-radius: 0; }
+.seg .btn.on { background: var(--accent-soft); color: var(--accent); }

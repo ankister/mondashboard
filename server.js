@@ -66,6 +66,7 @@ function cleanPages(pages) {
     id: p.id || id(),
     name: String(p.name || 'Onglet').slice(0, 40),
     icon: String(p.icon || '').slice(0, 8),
+    ...(p.free ? { free: true } : {}),
     widgets: (p.widgets || []).filter(w => WIDGETS[w.type]).map(w => {
       const cfg = w.config && typeof w.config === 'object' ? w.config : {};
       if (w.type === 'bookmarks') {
@@ -83,9 +84,12 @@ function cleanPages(pages) {
         id: w.id || id(), type: w.type, title: String(w.title ?? WIDGETS[w.type].label).slice(0, 60),
         w: Math.min(12, Math.max(2, Number(w.w) || WIDGETS[w.type].w)),
         ...(Number.isInteger(w.x) && Number.isInteger(w.y) ? { x: Math.min(11, Math.max(0, w.x)), y: Math.max(0, w.y) } : {}),
-        h: Math.min(3000, Math.max(0, Math.round(Number(w.h) || 0))),
+        // h : hauteur en px ; 0 = automatique ; -1 = aligner sur les blocs voisins
+        h: Number(w.h) === -1 ? -1 : Math.min(3000, Math.max(0, Math.round(Number(w.h) || 0))),
         refresh: Math.max(3, Number(w.refresh) || WIDGETS[w.type].refresh),
         ...(w.hideMobile ? { hideMobile: true } : {}),
+        ...(w.anchor && typeof w.anchor.id === 'string' && ['top', 'bottom'].includes(w.anchor.edge)
+          ? { anchor: { id: w.anchor.id.slice(0, 40), edge: w.anchor.edge } } : {}),
         integrations: (w.integrations || []).filter(x => ints.has(x)),
         config: cfg
       };
@@ -221,6 +225,7 @@ async function widgetData(w) {
     case 'weather':
       return weather(cfg);
     case 'notes':
+    case 'title':
       return {};
     case 'rss': {
       const { results, errors } = await fromIntegrations(w, 'rss');

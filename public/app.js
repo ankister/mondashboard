@@ -248,6 +248,14 @@ function renderApp() {
       ${S.edit ? '<button class="tab tab-add" data-act="add-tab">＋ Onglet</button>' : ''}
     </nav>
     <main>
+      ${S.edit && p ? `<div class="place-bar">
+        <span class="muted small">Placement</span>
+        <div class="seg">
+          <button class="btn sm ${p.free ? '' : 'on'}" data-act="place" data-free="0" title="Les widgets remontent tout seuls pour combler les vides">Compact</button>
+          <button class="btn sm ${p.free ? 'on' : ''}" data-act="place" data-free="1" title="Les widgets restent où tu les poses, même avec de l'espace vide au-dessus">Libre</button>
+        </div>
+        <span class="muted small">${p.free ? 'Pose les widgets où tu veux. Pour caler un widget sur un autre : ⚙ → « Aligner le haut sur ».' : 'Les widgets se tassent vers le haut.'}</span>
+      </div>` : ''}
       ${p ? `<div class="grid-stack" id="grid">${p.widgets.filter(shown).map(widgetShell).join('')}</div>` : '<div class="empty">Aucun onglet. Passe en mode « Modifier » pour en créer un.</div>'}
       ${S.edit && p ? '<button class="add-widget" data-act="add-widget">＋ Ajouter un widget</button>' : ''}
       ${!S.edit && p && !p.widgets.length ? `<div class="empty">Onglet vide.${canEdit() ? ' Clique sur « Modifier » pour ajouter des widgets.' : ''}</div>` : ''}
@@ -261,8 +269,9 @@ function renderApp() {
 const WIDTHS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const HEIGHTS = [0, 150, 250, 350, 450, 600, 800];
 const heightOptions = h => {
-  const list = HEIGHTS.includes(h) ? HEIGHTS : [...HEIGHTS, h].sort((a, b) => a - b);
-  return list.map(n => `<option value="${n}" ${n === h ? 'selected' : ''}>${n ? n + ' px' : 'Auto'}</option>`).join('');
+  const list = HEIGHTS.includes(h) || h === -1 ? HEIGHTS : [...HEIGHTS, h].sort((a, b) => a - b);
+  return `<option value="-1" ${h === -1 ? 'selected' : ''} title="Étire le bloc pour que son bas s'aligne sur celui des blocs d'à côté">Aligner</option>`
+    + list.map(n => `<option value="${n}" ${n === h ? 'selected' : ''}>${n ? n + ' px' : 'Auto'}</option>`).join('');
 };
 // Grille libre (gridstack) : 12 colonnes, lignes de 10 px, marge de 9 px autour de chaque bloc
 const CELL = 10, GAP = 9;
@@ -273,11 +282,13 @@ let GRID = null;
 function widgetShell(w) {
   const r = RENDER[w.type] || {};
   const h = Number(w.h) || 0;
+  const align = h === -1;
+  const tcfg = w.type === 'title' ? { line: true, ...(w.config || {}) } : null;
   const pos = Number.isInteger(w.x) && Number.isInteger(w.y) ? `gs-x="${w.x}" gs-y="${w.y}"` : 'gs-auto-position="true"';
   return `
-  <div class="grid-stack-item" gs-id="${w.id}" gs-min-w="2" gs-min-h="6" gs-w="${w.w}" gs-h="${h ? rowsFor(h) : 12}" ${pos} ${h ? '' : 'gs-size-to-content="true"'}>
+  <div class="grid-stack-item" gs-id="${w.id}" gs-min-w="2" gs-min-h="6" gs-w="${w.w}" gs-h="${h > 0 ? rowsFor(h) : 12}" ${pos} ${w.anchor ? `data-anchor="${esc(w.anchor.id)}:${w.anchor.edge}"` : ''} ${h ? '' : 'gs-size-to-content="true"'} ${align ? 'data-align="1"' : ''}>
   <div class="grid-stack-item-content">
-  <section class="widget ${w.type === 'bookmarks' ? 'bare' : ''} ${h ? 'fixed-h' : ''}" data-wid="${w.id}">
+  <section class="widget ${w.type === 'bookmarks' || (tcfg && !tcfg.card) ? 'bare' : ''} ${tcfg ? 'title-w' : ''} ${h ? 'fixed-h' : ''}" data-wid="${w.id}">
     <div class="w-head">
       ${S.edit ? '<span class="iconbtn handle" title="Glisser pour déplacer">⠿</span>' : ''}
       <div class="w-title">${esc(w.title)}${S.edit && w.hideMobile ? ' <span class="w-badge" title="Masqué sur téléphone">📵 masqué</span>' : ''}</div>
@@ -290,25 +301,69 @@ function widgetShell(w) {
     </div>
     <div class="w-body">
       ${r.static ? `<div class="w-static">${r.static(w)}</div>` : ''}
-      <div class="w-dyn">${r.static && w.type === 'bookmarks' ? '' : '<div class="skeleton"></div>'}</div>
+      <div class="w-dyn">${r.static && ['bookmarks', 'title'].includes(w.type) ? '' : '<div class="skeleton"></div>'}</div>
     </div>
   </section>
   </div></div>`;
 }
 
 let RO = null;
+// Hauteur « Aligner » : le bloc s'étire jusqu'au bas du groupe de blocs placés à côté de lui.
+// Ex. : Plex à droite de « Home Assistant » + « Torrents » empilés → Plex finit au même niveau que Torrents.
+let ALIGNING = false;
+function alignBlocks() {
+  if (!GRID || ALIGNING) return;
+  ALIGNING = true;
+  try {
+    const nodes = GRID.engine.nodes;
+    const single = GRID.getColumn() === 1;
+    // placement libre : un widget ancré suit le haut (ou le bas) d'un autre widget
+    if (!single) for (const n of nodes) {
+      const a = n.el?.getAttribute('data-anchor');
+      if (!a) continue;
+      const [id, edge] = a.split(':');
+      const t = nodes.find(o => o.id === id);
+      if (!t || t === n) continue;
+      const y = edge === 'bottom' ? t.y + t.h : t.y;
+      if (y === n.y) continue;
+      // on ne bouscule pas un widget qui occuperait déjà la place (évite les boucles)
+      const clash = nodes.some(o => o !== n && o.x < n.x + n.w && o.x + o.w > n.x && o.y < y + n.h && o.y + o.h > y);
+      if (!clash || y > n.y) GRID.update(n.el, { y });
+    }
+    for (const n of nodes) {
+      if (!n.el?.hasAttribute('data-align')) continue;
+      // hauteur minimale : celle du contenu
+      const wEl = $('.widget', n.el);
+      const natural = wEl ? $('.w-head', wEl).offsetHeight + $('.w-body', wEl).scrollHeight + 2 : 0;
+      let bottom = n.y + Math.max(6, rowsFor(natural));
+      if (!single) {
+        // blocs côte à côte (sans recouvrement horizontal), de proche en proche
+        const side = nodes.filter(o => o !== n && !o.el?.hasAttribute('data-align') && (o.x + o.w <= n.x || o.x >= n.x + n.w));
+        let grew = true;
+        while (grew) {
+          grew = false;
+          for (const o of side) {
+            // y compris les blocs empilés juste en dessous dans la colonne d'à côté
+            if (o.y <= bottom && o.y + o.h > n.y && o.y + o.h > bottom) { bottom = o.y + o.h; grew = true; }
+          }
+        }
+      }
+      if (bottom - n.y !== n.h) GRID.update(n.el, { h: bottom - n.y });
+    }
+  } finally { ALIGNING = false; }
+}
 function initGrid(p) {
   if (GRID) { try { GRID.destroy(false); } catch { /* déjà détruite */ } GRID = null; }
   const el = $('#grid');
   if (!el || !window.GridStack) return;
   GRID = GridStack.init({
-    column: 12, cellHeight: CELL, margin: GAP, mode: 'top', animate: true,
+    column: 12, cellHeight: CELL, margin: GAP, mode: p.free ? 'float' : 'top', animate: true,
     handle: '.handle', staticGrid: !S.edit,
     resizable: { handles: 'e,se,s,sw,w' },
     columnOpts: { breakpoints: [{ w: 760, c: 1 }], layout: 'list' }
   }, el);
   // ajuste les blocs « Auto » à leur contenu une fois affichés
-  setTimeout(() => $$('.grid-stack-item[gs-size-to-content]', el).forEach(i => GRID?.resizeToContent(i)), 50);
+  setTimeout(() => { $$('.grid-stack-item[gs-size-to-content]', el).forEach(i => GRID?.resizeToContent(i)); alignBlocks(); }, 50);
   // un bloc « Auto » suit son contenu quand celui-ci change de taille
   // (volet déplié, image chargée, liste rallongée…) au lieu d'être recouvert par le bloc du dessous
   RO?.disconnect();
@@ -318,6 +373,7 @@ function initGrid(p) {
     requestAnimationFrame(() => {
       for (const it of pending) if (GRID && it.isConnected && it.hasAttribute('gs-size-to-content')) GRID.resizeToContent(it);
       pending.clear();
+      alignBlocks();
     });
   });
   $$('.grid-stack-item .w-body', el).forEach(b => RO.observe(b));
@@ -331,7 +387,13 @@ function initGrid(p) {
     }
   });
   GRID.on('resizestop', (_e, item) => userResized.add(item.getAttribute('gs-id')));
+  // déplacer à la main un widget ancré retire son ancrage
+  GRID.on('dragstop', (_e, item) => {
+    const w = p.widgets.find(x => x.id === item.getAttribute('gs-id'));
+    if (w?.anchor) { delete w.anchor; item.removeAttribute('data-anchor'); toast('Ancrage retiré : le widget reste où tu l\'as posé'); }
+  });
   GRID.on('change', (_e, nodes) => {
+    if (!ALIGNING) setTimeout(alignBlocks, 0);
     if (!S.edit) return;
     let dirty = false;
     for (const n of nodes) {
@@ -373,6 +435,7 @@ function stopTimers() { S.timers.forEach(clearInterval); S.timers = []; }
 
 function startWidget(w) {
   if (w.type === 'notes') { RENDER.notes.bind(w, widgetEl(w.id)); return; }
+  if (w.type === 'title') return;
   const load = () => loadWidget(w);
   load();
   S.timers.push(setInterval(() => { if (!document.hidden) load(); }, Math.max(3, w.refresh) * 1000));
@@ -1152,6 +1215,16 @@ const RENDER = {
     }
   },
 
+  title: {
+    static: w => {
+      const c = { size: 'Moyenne', align: 'Gauche', line: true, ...(w.config || {}) };
+      const cls = { Petite: 's', Moyenne: 'm', Grande: 'l' }[c.size] || 'm';
+      const al = { Gauche: 'left', Centre: 'center', Droite: 'right' }[c.align] || 'left';
+      return `<div class="tbar tsz-${cls} ${c.line ? 'tbar-line' : ''}" style="text-align:${al}">
+        <div class="tbar-t">${c.icon ? `<span class="tbar-i">${esc(c.icon)}</span>` : ''}${esc(w.title)}</div>
+        ${c.subtitle ? `<div class="tbar-s">${esc(c.subtitle)}</div>` : ''}</div>`;
+    }
+  },
   notes: {
     static: w => `
       <div class="note-view">
@@ -1361,6 +1434,14 @@ function bindApp() {
       }
       case 'add-tab': e.stopPropagation(); editTab(null); break;
       case 'edit-tab': e.stopPropagation(); editTab(page()); break;
+      case 'place': {
+        const pg = page();
+        pg.free = t.dataset.free === '1';
+        if (!pg.free) pg.widgets.forEach(w => { delete w.anchor; });
+        await savePages(false);
+        renderApp();
+        break;
+      }
       case 'add-widget': pickWidgetType(); break;
       case 'config-widget': widgetForm(w); break;
       case 'delete-widget':
@@ -1376,6 +1457,7 @@ function bindApp() {
     if (act !== 'width' && act !== 'height') return;
     const w = page().widgets.find(x => x.id === e.target.closest('.widget').dataset.wid);
     if (act === 'width') w.w = Number(e.target.value);
+    else if (Number(e.target.value) === -1) w.h = -1;
     else w.h = Number(e.target.value);
     savePages();
   });
@@ -1525,10 +1607,18 @@ function widgetForm(orig) {
         </div>
       </div>
       <div class="row2">
-        <label>Hauteur en px (0 = automatique)<input type="number" name="h" min="0" step="10" value="${Number(w.h) || 0}"></label>
+        <label>Hauteur en px (0 = automatique, -1 = aligner)<input type="number" name="h" min="-1" step="10" value="${Number(w.h) || 0}"></label>
         ${orig.id ? `<label>Onglet<select name="tab">${S.dash.pages.map(pg => `<option value="${pg.id}" ${pg.id === page().id ? 'selected' : ''}>${esc(pg.icon || '')} ${esc(pg.name)}</option>`).join('')}</select></label>` : '<div></div>'}
       </div>
       <label class="chk"><input type="checkbox" name="hideMobile" ${w.hideMobile ? 'checked' : ''}> Masquer sur téléphone (écran de moins de 760 px)</label>
+      ${orig.id ? `<label>Aligner le haut sur
+        <select name="anchor">
+          <option value="">— position libre —</option>
+          ${page().widgets.filter(x => x.id !== w.id).map(x => `
+            <option value="${x.id}:top" ${w.anchor?.id === x.id && w.anchor.edge === 'top' ? 'selected' : ''}>le haut de « ${esc(x.title)} »</option>
+            <option value="${x.id}:bottom" ${w.anchor?.id === x.id && w.anchor.edge === 'bottom' ? 'selected' : ''}>le bas de « ${esc(x.title)} »</option>`).join('')}
+        </select></label>
+      <div class="help">Le widget suit l'autre quand il bouge ou change de taille. Active le placement « Libre » de l'onglet (il s'active tout seul si besoin).</div>` : ''}
       ${intField}
       ${(d.options || []).map(o => optionField(o, w.config?.[o.key])).join('')}
       ${w.type === 'bookmarks' ? '<div class="section-lbl">Catégories et liens</div><div id="bmEditor"></div><div class="help">Icône : nom du catalogue <a href="https://dashboardicons.com" target="_blank" rel="noopener" style="color:var(--accent)">dashboardicons.com</a> (ex. <span class="mono">plex</span>, <span class="mono">uptime-kuma</span>), une URL d\'image ou un emoji. Laisse vide pour essayer le nom du service puis l\'icône du site. « URL de test » permet de vérifier une adresse interne différente du lien.</div>' : ''}
@@ -1632,6 +1722,9 @@ function widgetForm(orig) {
     w.refresh = Math.max(3, Number(fd.get('refresh')) || d.refresh);
     w.h = Math.max(0, Number(fd.get('h')) || 0);
     w.hideMobile = fd.get('hideMobile') === 'on';
+    const anc = String(fd.get('anchor') || '');
+    if (anc) { const [id, edge] = anc.split(':'); w.anchor = { id, edge }; } else delete w.anchor;
+    if (w.anchor && !page().free) { page().free = true; toast('Placement « Libre » activé pour cet onglet'); }
     w.integrations = d.integrations ? fd.getAll('int') : [];
     w.config = w.config || {};
     for (const o of d.options || []) {
@@ -1644,7 +1737,7 @@ function widgetForm(orig) {
     if (orig.id && dest && dest !== page().id) {
       // déplacement vers un autre onglet : placé automatiquement dans la grille de destination
       ws.splice(ws.findIndex(x => x.id === orig.id), 1);
-      delete w.x; delete w.y;
+      delete w.x; delete w.y; delete w.anchor;
       S.dash.pages.find(pg => pg.id === dest).widgets.push(w);
       toast(`Widget déplacé vers « ${S.dash.pages.find(pg => pg.id === dest).name} »`);
     } else if (orig.id) ws[ws.findIndex(x => x.id === orig.id)] = w;
