@@ -406,7 +406,12 @@ function paintWidget(w, data) {
     return;
   }
   const html = RENDER[w.type].dyn(data, w, el);
-  if (html !== undefined) dyn.innerHTML = html + errorsHtml(data.errors);
+  if (html !== undefined) {
+    // garde ouverts les volets dépliés (mises à jour, stockage…) d'un rafraîchissement à l'autre
+    const opened = $$('details', dyn).map(x => x.open);
+    dyn.innerHTML = html + errorsHtml(data.errors);
+    $$('details', dyn).forEach((x, i) => { if (opened[i]) x.open = true; });
+  }
   fitWidget(w.id);
 }
 const errorsHtml = errs => (errs?.length ? errs.map(e => `<div class="w-warn">⚠ ${esc(e.name)} : ${esc(e.error)}</div>`).join('') : '');
@@ -501,6 +506,44 @@ function calMonth(evs, st) {
       <div class="day-lbl">${esc(selDate.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }))}</div>
       ${selList.length ? selList.map(evLine).join('') : '<div class="muted small">Aucun événement</div>'}
     </div>`;
+}
+
+// ---------- mises à jour (widget Machine) ----------
+// HA Core / OS / Supervisor redémarrent Home Assistant : on les installe en dernier
+const isHaSelf = u => /^update\.home_assistant_/.test(u.entity || '');
+// les systèmes d'exploitation (Unraid OS, HA OS…) redémarrent la machine : décochés par défaut
+const isOsUpdate = u => /(^|\s)OS(\s|$)|operating system/i.test(u.name || '');
+function updAll(d, w) {
+  const list = (d.updates || []).filter(u => u.entity && u.canInstall && !u.inProgress && !(S.updBusy?.[u.entity] && Date.now() - S.updBusy[u.entity] < 20000));
+  if (!canEdit() || list.length < 2) return '';
+  if (S.updAllAsk?.[w.id]) {
+    return `<div class="upd-ask upd-all">
+      <span>Mettre à jour :</span>
+      ${list.map(u => `<label class="chk"><input type="checkbox" data-upd-pick="${esc(u.entity)}" ${isOsUpdate(u) ? '' : 'checked'}> ${esc(u.name)} <span class="muted">${esc(u.to || '')}</span>${isOsUpdate(u) ? ' <span class="chip warn">redémarrage</span>' : ''}</label>`).join('')}
+      ${list.some(u => isHaSelf(u) && u.canBackup) ? '<label class="chk"><input type="checkbox" data-upd-backup checked> Sauvegarde avant la mise à jour de Home Assistant</label>' : ''}
+      <div class="help" style="flex:1 1 100%">Les mises à jour partent une par une ; celles de Home Assistant lui-même en dernier, car il redémarre.</div>
+      <button type="button" class="btn sm primary" data-upd="all-go" data-int="${esc(d.integrationId || '')}">Lancer</button>
+      <button type="button" class="btn sm" data-upd="all-cancel">Annuler</button>
+    </div>`;
+  }
+  return `<div class="upd-all-bar"><button type="button" class="btn sm" data-upd="all-ask">⬆ Tout mettre à jour (${list.length})</button></div>`;
+}
+function updItem(u, w, d) {
+  const ver = `<span class="muted">${esc(u.from || '')} → ${esc(u.to || '')}</span>`;
+  const name = u.url && /^https?:\/\//.test(u.url) ? `<a href="${esc(u.url)}" target="_blank" rel="noopener" title="Notes de version">${esc(u.name)}</a>` : esc(u.name);
+  // installation en cours (signalée par HA, ou lancée il y a moins de 20 s)
+  const busy = u.inProgress || (S.updBusy?.[u.entity] && Date.now() - S.updBusy[u.entity] < 20000);
+  let act = '';
+  if (busy) act = `<span class="upd-busy">⏳ installation${u.percent != null ? ` ${Math.round(u.percent)} %` : '…'}</span>`;
+  else if (u.entity && u.canInstall && canEdit()) act = `<button type="button" class="btn sm upd-btn" data-upd="ask" data-entity="${esc(u.entity)}">Installer</button>`;
+  const ask = !busy && S.updAsk?.[w.id] === u.entity ? `<div class="upd-ask">
+      <span>Installer ${esc(u.name)} ${esc(u.to || '')} ?</span>
+      ${u.canBackup ? `<button type="button" class="btn sm primary" data-upd="backup" data-entity="${esc(u.entity)}" data-int="${esc(d.integrationId || '')}">Avec sauvegarde</button>` : ''}
+      <button type="button" class="btn sm ${u.canBackup ? '' : 'primary'}" data-upd="install" data-entity="${esc(u.entity)}" data-int="${esc(d.integrationId || '')}">${u.canBackup ? 'Sans sauvegarde' : 'Installer'}</button>
+      <button type="button" class="btn sm" data-upd="skip" data-entity="${esc(u.entity)}" data-int="${esc(d.integrationId || '')}" title="Ne plus proposer cette version">Ignorer cette version</button>
+      <button type="button" class="btn sm" data-upd="cancel">Annuler</button>
+    </div>` : '';
+  return `<li class="${act ? 'upd-li' : ''}"><span class="upd-txt">${u.security ? '🔒 ' : ''}${name} ${ver}</span>${act}${ask}</li>`;
 }
 
 // ---------- torrents : utilitaires ----------
@@ -775,6 +818,58 @@ const RENDER = {
   },
 
   machine: {
+    bind(w, el) {
+      // mises à jour Home Assistant : installer / ignorer depuis le widget
+      el.addEventListener('click', async e => {
+        const b = e.target.closest('[data-upd]');
+        if (!b) return;
+        e.preventDefault();
+        const ask = (S.updAsk ||= {});
+        const op = b.dataset.upd;
+        if (op === 'all-ask' || op === 'all-cancel') {
+          (S.updAllAsk ||= {})[w.id] = op === 'all-ask';
+          ask[w.id] = null;
+          if (S.cache[w.id]) paintWidget(w, S.cache[w.id]);
+          return;
+        }
+        if (op === 'all-go') {
+          const picked = $$('[data-upd-pick]', el).filter(c => c.checked).map(c => c.dataset.updPick);
+          const backup = !!$('[data-upd-backup]', el)?.checked;
+          const all = (S.cache[w.id]?.updates || []).filter(u => picked.includes(u.entity));
+          if (!all.length) { toast('Rien de coché', true); return; }
+          // ordre : le reste, puis Supervisor, OS et enfin Core
+          const rank = u => (!isHaSelf(u) ? 0 : /supervisor/.test(u.entity) ? 1 : /operating_system|_os_/.test(u.entity) ? 2 : 3);
+          all.sort((a, c) => rank(a) - rank(c));
+          S.updAllAsk[w.id] = false;
+          $$('[data-upd]', el).forEach(x => { x.disabled = true; });
+          let ok = 0; const fails = [];
+          for (const u of all) {
+            (S.updBusy ||= {})[u.entity] = Date.now();
+            if (S.cache[w.id]) paintWidget(w, S.cache[w.id]);
+            try {
+              await api(`/widgets/${pageOf(w)}/${w.id}/action`, { method: 'POST', body: { op: 'install', backup: backup && isHaSelf(u) && u.canBackup, entity: u.entity, integrationId: b.dataset.int || undefined } });
+              ok++;
+            } catch (err) { fails.push(`${u.name} : ${err.message}`); delete S.updBusy[u.entity]; }
+          }
+          toast(fails.length ? `${ok} lancée(s), ${fails.length} échec(s) — ${fails[0]}` : `${ok} mise(s) à jour lancée(s) ✓`, !!fails.length);
+          setTimeout(() => loadWidget(w), 1500);
+          return;
+        }
+        if (op === 'ask' || op === 'cancel') {
+          ask[w.id] = op === 'ask' ? b.dataset.entity : null;
+          if (S.cache[w.id]) paintWidget(w, S.cache[w.id]);
+          return;
+        }
+        ask[w.id] = null;
+        $$('[data-upd]', el).forEach(x => { x.disabled = true; });
+        try {
+          await api(`/widgets/${pageOf(w)}/${w.id}/action`, { method: 'POST', body: { op: op === 'skip' ? 'skip' : 'install', backup: op === 'backup', entity: b.dataset.entity, integrationId: b.dataset.int || undefined } });
+          toast(op === 'skip' ? 'Version ignorée' : 'Installation lancée ✓');
+          (S.updBusy ||= {})[b.dataset.entity] = Date.now();
+        } catch (err) { toast(err.message, true); }
+        setTimeout(() => loadWidget(w), 1500);
+      });
+    },
     dyn(d, w) {
       if (d.offline) return '<div class="m-head"><div class="small" style="display:flex;align-items:center;gap:8px;color:var(--bad)"><span class="dot down"></span>Hors ligne</div></div>';
       const c = w.config || {};
@@ -804,7 +899,7 @@ const RENDER = {
       const sec = (d.updates || []).filter(u => u.security).length;
       let upd = d.updates?.length ? `
         <details class="upd"><summary>${d.updates.length} mise(s) à jour disponible(s)${sec ? ` <span class="chip fail" style="margin-left:4px">🔒 ${sec} sécurité</span>` : ''}</summary>
-        <ul>${d.updates.map(u => `<li>${u.security ? '🔒 ' : ''}${esc(u.name)} <span class="muted">${esc(u.from || '')} → ${esc(u.to || '')}</span></li>`).join('')}</ul></details>`
+        ${updAll(d, w)}<ul>${d.updates.map(u => updItem(u, w, d)).join('')}</ul></details>`
         : (d.updates ? '<div class="muted small" style="margin-top:10px">✓ Système à jour</div>' : '');
       if (d.imageUpdates) upd += `<div class="w-warn">⬆ ${d.imageUpdates} conteneur(s) avec une image plus récente disponible</div>`;
       if ((d.fs || []).length > 2) {
