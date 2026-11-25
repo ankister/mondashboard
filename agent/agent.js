@@ -12,7 +12,7 @@ const zlib = require('node:zlib');
 const crypto = require('node:crypto');
 const { execFile, spawn } = require('node:child_process');
 
-const VERSION = '1.2.0';
+const VERSION = '1.2.2';
 const env = (k, d) => (process.env[k] === undefined || process.env[k] === '' ? d : process.env[k]);
 const CFG = {
   token: env('HD_TOKEN', ''),
@@ -468,11 +468,14 @@ function dockerPull(ref) {
   });
 }
 // retire de la config du conteneur ce qui venait de l'ancienne image, pour que la nouvelle s'applique
-function ownConfig(cfg, imgCfg, oldId) {
+function ownConfig(cfg, imgCfg, oldId, newCfg) {
   const c = { ...cfg };
   const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  // une variable n'est retirée que si elle vient de l'ancienne image ET que la nouvelle la fournit encore ;
+  // sinon on la garde (ex. : valeur saisie identique à l'ancienne valeur par défaut, retirée de la nouvelle image)
   const imgEnv = new Set(imgCfg?.Env || []);
-  c.Env = (cfg.Env || []).filter(e => !imgEnv.has(e));
+  const newKeys = new Set((newCfg?.Env || []).map(e => e.split('=')[0]));
+  c.Env = (cfg.Env || []).filter(e => !(imgEnv.has(e) && newKeys.has(e.split('=')[0])));
   const imgLabels = imgCfg?.Labels || {};
   c.Labels = Object.fromEntries(Object.entries(cfg.Labels || {}).filter(([k, v]) => imgLabels[k] !== v));
   for (const k of ['Cmd', 'Entrypoint', 'WorkingDir', 'User', 'Healthcheck', 'StopSignal']) if (same(cfg[k], imgCfg?.[k])) delete c[k];
@@ -481,9 +484,41 @@ function ownConfig(cfg, imgCfg, oldId) {
   if (c.Hostname && oldId.startsWith(c.Hostname)) delete c.Hostname; // nom d'hôte automatique = id court
   return c;
 }
+// Unraid : un conteneur créé depuis un modèle (dockerman) est mis à jour par le script d'Unraid lui-même,
+// celui de « apply update » : modèle respecté, statut « update ready » effacé, ancienne image supprimée.
+const UNRAID_UPDATE = '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/update_container';
+function unraidUpdate(name, job) {
+  return new Promise((resolve, reject) => {
+    job.log = [];
+    const child = spawn('nsenter', ['-t', '1', '-m', '-u', '-i', '-n', '-p', '--', UNRAID_UPDATE, name], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const add = c => {
+      for (const l of String(c).replace(/<[^>]+>/g, ' ').split(/\r?\n/)) if (l.trim()) job.log.push(l.trim().slice(0, 300));
+      if (job.log.length > 40) job.log.splice(0, job.log.length - 40);
+    };
+    const killer = setTimeout(() => child.kill('SIGTERM'), 1800e3);
+    child.stdout.on('data', add); child.stderr.on('data', add);
+    child.on('error', e => { clearTimeout(killer); reject(new Error(e.code === 'ENOENT' ? 'nsenter introuvable dans le conteneur de l\'agent' : e.message)); });
+    child.on('close', code => {
+      clearTimeout(killer);
+      if (code === 0) resolve(); else reject(new Error(`Le script de mise à jour d'Unraid a échoué (code ${code}) : ${job.log.slice(-2).join(' / ')}`));
+    });
+  });
+}
+
 async function recreate(name) {
   const job = ctJobs.get(name);
   const old = await docker('GET', `/containers/${encodeURIComponent(name)}/json`);
+  if ((await staticInfo()).unraid && old.Config?.Labels?.['net.unraid.docker.managed'] === 'dockerman'
+      && exists(H(`/boot/config/plugins/dockerMan/templates-user/my-${name}.xml`))) {
+    if (/mondashboard-agent|homedash-agent/.test(old.Config.Image)) throw new Error('L\'agent ne peut pas se mettre à jour lui-même');
+    job.state = 'pulling'; job.image = old.Config.Image; job.via = 'unraid';
+    await unraidUpdate(name, job);
+    const now = await docker('GET', `/containers/${encodeURIComponent(name)}/json`).catch(() => null);
+    if (state.imageUpdates[old.Config.Image]) state.imageUpdates[old.Config.Image] = { update: false, checkedAt: new Date().toISOString() };
+    job.state = 'done';
+    if (now && now.Image === old.Image) job.note = 'déjà à jour';
+    return;
+  }
   const ref = old.Config.Image;
   if (/^sha256:|^[a-f0-9]{64}$/.test(ref)) throw new Error('Image sans nom : impossible de savoir quoi télécharger');
   if (/mondashboard-agent|homedash-agent/.test(ref)) throw new Error('L\'agent ne peut pas se mettre à jour lui-même : mets sa stack à jour dans Dockhand');
@@ -503,7 +538,7 @@ async function recreate(name) {
     Aliases: (n.Aliases || []).filter(a => !old.Id.startsWith(a))
   });
   const body = {
-    ...ownConfig(old.Config, oldImg?.Config, old.Id), Image: ref, HostConfig: hc,
+    ...ownConfig(old.Config, oldImg?.Config, old.Id, fresh.Config), Image: ref, HostConfig: hc,
     NetworkingConfig: shared || !nets.length ? undefined : { EndpointsConfig: { [nets[0][0]]: endpoint(nets[0]) } }
   };
   const backup = `${name}-ancien-${Date.now().toString(36)}`;
@@ -522,6 +557,8 @@ async function recreate(name) {
     throw new Error(`Recréation impossible, ancien conteneur remis en place : ${e.message}`);
   }
   await docker('DELETE', `/containers/${old.Id}?v=0`).catch(e => log('suppression de l\'ancien conteneur', e.message));
+  // l'ancienne image n'a plus de nom : on la supprime si plus aucun conteneur ne l'utilise (pas d'image orpheline)
+  await docker('DELETE', `/images/${old.Image}`).catch(() => {});
   if (state.imageUpdates[ref]) state.imageUpdates[ref] = { update: false, checkedAt: new Date().toISOString() };
   job.state = 'done';
 }
