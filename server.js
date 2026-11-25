@@ -241,6 +241,12 @@ async function widgetData(w) {
       const continuation = results.find(r => r.continuation)?.continuation || null;
       return { items, errors, continuation };
     }
+    case 'reader': {
+      if (!w.integrations?.length) return { empty: true };
+      const { results, errors } = await fromIntegrations(w, 'reader');
+      if (!results.length) return { errors, offline: true };
+      return { ...results[0], errors, stream: cfg._s || 'all', filter: cfg._f || 'all' };
+    }
     default: {
       const kind = WIDGETS[w.type].kind;
       if (!w.integrations?.length) return { empty: true };
@@ -270,6 +276,11 @@ app.get('/api/widgets/:pageId/:widgetId', requireView, wrap(async req => {
   if (found.type === 'rss' && req.query.c) {
     w = { ...found, config: { ...(found.config || {}), _c: String(req.query.c).slice(0, 300) } };
     key = `${found.id}|c|${req.query.c}`;
+  }
+  if (found.type === 'reader') {
+    const s = String(req.query.s || 'all').slice(0, 250), f = req.query.f === 'unread' ? 'unread' : 'all', c = String(req.query.c || '').slice(0, 300);
+    w = { ...found, config: { ...(found.config || {}), _s: s, _f: f, _c: c || undefined } };
+    key = `${found.id}|r|${s}|${f}|${c}`;
   }
   const ttl = Math.max(2000, w.refresh * 1000 * 0.8);
   const c = cache.get(key);
@@ -308,6 +319,22 @@ app.post('/api/widgets/:pageId/:widgetId/action', requireAdmin, wrap(async req =
 agentRoutes(app, { requireAdmin, wrap, bad });
 
 // ---------- Frontend ----------
+// vignettes générées pour les articles de démonstration
+if (process.env.DEMO === '1') {
+  app.get('/demo/thumb/:n.svg', (req, res) => {
+    const n = Number.parseInt(req.params.n, 10) || 0;
+    const hues = [200, 160, 28, 280, 340, 120, 48, 220];
+    const h = hues[n % hues.length], h2 = (h + 40) % 360;
+    const shapes = [
+      '<circle cx="250" cy="120" r="70" fill="#fff" opacity=".18"/><circle cx="110" cy="200" r="110" fill="#fff" opacity=".1"/>',
+      '<rect x="60" y="70" width="140" height="110" rx="12" fill="#fff" opacity=".18"/><rect x="190" y="120" width="170" height="120" rx="12" fill="#fff" opacity=".12"/>',
+      '<path d="M0 230 L120 110 L200 190 L280 90 L400 230 Z" fill="#fff" opacity=".18"/><circle cx="310" cy="70" r="28" fill="#fff" opacity=".3"/>',
+      '<path d="M40 200 Q200 20 360 200" stroke="#fff" stroke-width="22" fill="none" opacity=".2"/><circle cx="200" cy="120" r="36" fill="#fff" opacity=".22"/>'
+    ];
+    res.type('image/svg+xml').set('Cache-Control', 'max-age=86400').send(`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="240" viewBox="0 0 400 240"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(${h} 55% 45%)"/><stop offset="1" stop-color="hsl(${h2} 60% 28%)"/></linearGradient></defs><rect width="400" height="240" fill="url(#g)"/>${shapes[n % shapes.length]}</svg>`);
+  });
+}
+
 app.use('/vendor/gridstack', express.static(path.resolve('node_modules/gridstack/dist'), { maxAge: '7d' }));
 // Interface : toujours revalidée (ETag), et index.html versionné pour forcer le rechargement après une mise à jour
 app.use(express.static(path.resolve('public'), {

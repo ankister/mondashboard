@@ -281,14 +281,14 @@ let GRID = null;
 
 function widgetShell(w) {
   const r = RENDER[w.type] || {};
-  const h = Number(w.h) || 0;
+  const h = rdFill(w) ? rdFillPx() : (Number(w.h) || 0);
   const align = h === -1;
   const tcfg = w.type === 'title' ? { line: true, ...(w.config || {}) } : null;
   const pos = Number.isInteger(w.x) && Number.isInteger(w.y) ? `gs-x="${w.x}" gs-y="${w.y}"` : 'gs-auto-position="true"';
   return `
   <div class="grid-stack-item" gs-id="${w.id}" gs-min-w="2" gs-min-h="6" gs-w="${w.w}" gs-h="${h > 0 ? rowsFor(h) : 12}" ${pos} ${w.anchor ? `data-anchor="${esc(w.anchor.id)}:${w.anchor.edge}"` : ''} ${h ? '' : 'gs-size-to-content="true"'} ${align ? 'data-align="1"' : ''}>
   <div class="grid-stack-item-content">
-  <section class="widget ${w.type === 'bookmarks' || (tcfg && !tcfg.card) ? 'bare' : ''} ${tcfg ? 'title-w' : ''} ${h ? 'fixed-h' : ''}" data-wid="${w.id}">
+  <section class="widget ${w.type === 'bookmarks' || (tcfg && !tcfg.card) ? 'bare' : ''} ${tcfg ? 'title-w' : ''} ${w.type === 'reader' ? 'rd-w' : ''} ${h ? 'fixed-h' : ''}" data-wid="${w.id}">
     <div class="w-head">
       ${S.edit ? '<span class="iconbtn handle" title="Glisser pour déplacer">⠿</span>' : ''}
       <div class="w-title">${esc(w.title)}${S.edit && w.hideMobile ? ' <span class="w-badge" title="Masqué sur téléphone">📵 masqué</span>' : ''}</div>
@@ -363,7 +363,7 @@ function initGrid(p) {
     columnOpts: { breakpoints: [{ w: 760, c: 1 }], layout: 'list' }
   }, el);
   // ajuste les blocs « Auto » à leur contenu une fois affichés
-  setTimeout(() => { $$('.grid-stack-item[gs-size-to-content]', el).forEach(i => GRID?.resizeToContent(i)); alignBlocks(); }, 50);
+  setTimeout(() => { $$('.grid-stack-item[gs-size-to-content]', el).forEach(i => GRID?.resizeToContent(i)); rdFitAll(); alignBlocks(); }, 50);
   // un bloc « Auto » suit son contenu quand celui-ci change de taille
   // (volet déplié, image chargée, liste rallongée…) au lieu d'être recouvert par le bloc du dessous
   RO?.disconnect();
@@ -849,6 +849,431 @@ function rssReader(w, el, it) {
   $('[data-close2]', m.el).onclick = m.close;
 }
 
+// ---------- lecteur RSS complet (FreshRSS) : catégories, liste, lecture ----------
+const RD_KEY = id => `rd_${id}`;
+function rdState(w) {
+  S.rd ||= {};
+  if (!S.rd[w.id]) {
+    let saved = {};
+    try { saved = JSON.parse(localStorageGet(RD_KEY(w.id)) || '{}'); } catch { /* ignoré */ }
+    S.rd[w.id] = {
+      stream: saved.stream || 'all', filter: saved.filter || (w.config?.unreadOnly === false ? 'all' : 'unread'),
+      collapsed: new Set(saved.collapsed || []), items: [], ids: new Set(), cont: null, loading: false,
+      sel: null, tree: null, q: '', side: false, intId: null, loadedAt: null, queue: new Map(), ready: false
+    };
+  }
+  return S.rd[w.id];
+}
+function rdSave(w) {
+  const st = rdState(w);
+  localStorageSet(RD_KEY(w.id), JSON.stringify({ stream: st.stream, filter: st.filter, collapsed: [...st.collapsed] }));
+}
+const rdText = html => { const d = document.createElement('div'); d.innerHTML = String(html || '').replace(/<(script|style)[\s\S]*?<\/\1>/gi, ''); return (d.textContent || '').replace(/\s+/g, ' ').trim(); };
+const rdImg = u => (u && (/^https?:\/\//i.test(u) || /^\/[^/]/.test(u)) ? u : '');
+function rdFeed(st, id) {
+  for (const c of st.tree?.categories || []) { const f = c.feeds.find(x => x.id === id); if (f) return { f, c }; }
+  return {};
+}
+function rdFavicon(feed, name) {
+  const letter = esc((name || '?').trim().charAt(0).toUpperCase());
+  const hue = [...String(name || '')].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) % 360, 7);
+  const fb = `<span class="rd-fav l" style="--h:${hue}">${letter}</span>`;
+  const src = rdImg(feed?.icon);
+  return src ? `<img class="rd-fav" src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.outerHTML='${fb.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}'">` : fb;
+}
+function rdStreamName(st) {
+  if (st.stream === 'all') return 'Tous les articles';
+  if (st.stream === 'starred') return 'Favoris';
+  const c = st.tree?.categories?.find(x => x.id === st.stream);
+  if (c) return c.name;
+  return rdFeed(st, st.stream).f?.name || 'Flux';
+}
+const rdCount = n => (n ? `<span class="rd-n">${n > 999 ? '999+' : n}</span>` : '');
+
+function rdSideHtml(st) {
+  const t = st.tree;
+  const it = (id, icon, name, n, extra = '') => `<button type="button" class="rd-s ${st.stream === id ? 'on' : ''} ${extra}" data-rs="${esc(id)}">${icon}<span class="nm">${esc(name)}</span>${rdCount(n)}</button>`;
+  return `
+    ${it('all', '<span class="rd-ico">≡</span>', 'Tous les articles', t?.unread)}
+    ${it('starred', '<span class="rd-ico star">★</span>', 'Favoris', 0)}
+    <div class="rd-sep">Catégories</div>
+    ${(t?.categories || []).map(c => {
+      const closed = st.collapsed.has(c.id);
+      return `<div class="rd-cat ${closed ? 'closed' : ''}">
+        <div class="rd-crow">
+          <button type="button" class="rd-tw" data-rtw="${esc(c.id)}" title="${closed ? 'Déplier' : 'Replier'}">▾</button>
+          ${it(c.id, '', c.name, c.unread, 'cat')}
+        </div>
+        <div class="rd-feeds">${c.feeds.map(f => it(f.id, rdFavicon(f, f.name), f.name, f.unread, `feed ${f.unread ? '' : 'zero'}`)).join('')}</div>
+      </div>`;
+    }).join('') || '<div class="muted small" style="padding:8px 12px">Aucun abonnement</div>'}`;
+}
+
+function rdItemHtml(st, i, k, showImg) {
+  const { f } = rdFeed(st, i.feedId);
+  const img = showImg ? rdImg(i.image) : '';
+  if (i._ex === undefined) {
+    // l'extrait ne répète pas le titre quand l'article commence par lui
+    let t = rdText(i.content);
+    const head = (i.title || '').trim();
+    if (head && t.toLowerCase().startsWith(head.toLowerCase())) t = t.slice(head.length).replace(/^[\s.:;,—–-]+/, '');
+    i._ex = t.slice(0, 220);
+  }
+  const ex = i._ex;
+  return `<div class="rd-item ${i.read ? 'read' : ''} ${st.sel === i.id ? 'sel' : ''}" data-rk="${k}" tabindex="-1">
+    <div class="rd-im">
+      <div class="rd-src">${rdFavicon(f, i.source)}<span>${esc(i.source)}</span><span class="rd-dt">${i.date ? relTime(i.date) : ''}</span></div>
+      <div class="rd-t">${!i.read ? '<i class="unread-dot"></i>' : ''}${esc(i.title)}</div>
+      ${ex ? `<div class="rd-ex">${esc(ex)}</div>` : ''}
+    </div>
+    ${img ? `<img class="rd-th" src="${esc(img)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
+    ${canEdit() ? `<button type="button" class="rd-star ${i.starred ? 'on' : ''}" data-rstar="${k}" title="${i.starred ? 'Retirer des favoris' : 'Ajouter aux favoris'}">★</button>` : ''}
+    <button type="button" class="rd-share" data-rshare="${k}" title="Partager">↗</button>
+  </div>`;
+}
+function rdVisible(st) {
+  const q = st.q.trim().toLowerCase();
+  return st.items.map((i, k) => [i, k]).filter(([i]) => !q || `${i.title} ${i.source} ${i._ex ?? rdText(i.content)}`.toLowerCase().includes(q));
+}
+function rdListHtml(w, st) {
+  const showImg = w.config?.showImages !== false;
+  const vis = rdVisible(st);
+  if (!st.ready) return '<div class="rd-pad"><div class="skeleton"></div><div class="skeleton" style="margin-top:10px"></div><div class="skeleton" style="margin-top:10px"></div></div>';
+  if (!vis.length) return `<div class="rd-none"><div class="e">${st.q ? '🔍' : '🎉'}</div>${st.q ? 'Aucun article chargé ne correspond à la recherche' : st.filter === 'unread' ? 'Tout est lu ici !' : 'Aucun article'}
+    ${st.q && st.cont ? '<button type="button" class="btn sm" data-rb="more">Chercher dans les articles plus anciens</button>' : ''}</div>`;
+  return vis.map(([i, k]) => rdItemHtml(st, i, k, showImg)).join('')
+    + (st.cont ? (st.q ? `<div class="rd-more"><button type="button" class="btn sm" data-rb="more">Chercher aussi dans les ${st.items.length > 1 ? 'articles plus anciens' : 'articles suivants'}</button></div>` : '<div class="rd-more muted small">Chargement des articles suivants…</div>')
+      : '<div class="rd-end muted small">— Fin des articles —</div>');
+}
+function rdViewHtml(st) {
+  const it = st.items.find(i => i.id === st.sel);
+  if (!it) {
+    return `<div class="rd-empty"><div class="e">📖</div><div>Choisis un article dans la liste</div>
+      <div class="muted small rd-keys"><kbd>j</kbd> <kbd>k</kbd> article suivant / précédent · <kbd>s</kbd> favori · <kbd>m</kbd> lu / non lu · <kbd>p</kbd> partager · <kbd>o</kbd> ouvrir l'original</div></div>`;
+  }
+  const { f } = rdFeed(st, it.feedId);
+  const body = it.content ? sanitizeHtml(it.content, it.link) : '<p class="muted">Pas de contenu dans le flux pour cet article.</p>';
+  const hero = rdImg(it.image) && !/<img\s/i.test(it.content || '') ? `<img class="rd-hero" src="${esc(it.image)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : '';
+  return `<div class="rd-vbar">
+      <button type="button" class="btn sm rd-back" data-rb="back">← Liste</button>
+      ${canEdit() ? `<button type="button" class="btn sm ${it.starred ? 'on' : ''}" data-rb="star" title="Favori (s)">${it.starred ? '★<span class="lbl"> En favori</span>' : '☆<span class="lbl"> Favori</span>'}</button>
+      <button type="button" class="btn sm" data-rb="toggle" title="Lu / non lu (m)">${it.read ? '●<span class="lbl"> Marquer non lu</span>' : '✓<span class="lbl"> Marquer lu</span>'}</button>` : ''}
+      <button type="button" class="btn sm" data-rb="share" title="Partager sur les réseaux (p)">↗<span class="lbl"> Partager</span></button>
+      <span style="flex:1"></span>
+      <button type="button" class="btn sm" data-rb="prev" title="Article précédent (k)">↑</button>
+      <button type="button" class="btn sm" data-rb="next" title="Article suivant (j)">↓</button>
+      <a class="btn sm" href="${esc(safeUrl(it.link))}" target="_blank" rel="noopener" title="Ouvrir l'original (o)"><span class="lbl">Ouvrir l'original </span>🔗</a>
+    </div>
+    <div class="rd-scroll"><article class="reader rd-art">
+      <div class="rd-src big">${rdFavicon(f, it.source)}<span>${esc(it.source)}</span></div>
+      <h1>${esc(it.title)}</h1>
+      <div class="muted small">${esc([it.author, it.date ? new Date(it.date).toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' }) : ''].filter(Boolean).join(' · '))}</div>
+      ${hero}
+      <div class="reader-body md">${body}</div>
+      <div class="rd-foot"><a class="btn" href="${esc(safeUrl(it.link))}" target="_blank" rel="noopener">Lire l'article sur ${esc(it.source || 'le site')} ↗</a></div>
+    </article></div>`;
+}
+function rdBarHtml(w, st) {
+  const total = st.stream === 'all' ? st.tree?.unread : st.stream === 'starred' ? null
+    : (st.tree?.categories?.find(c => c.id === st.stream)?.unread ?? rdFeed(st, st.stream).f?.unread);
+  return `
+    <button type="button" class="btn sm rd-burger" data-rb="side" title="Abonnements">☰</button>
+    <div class="rd-title"><b>${esc(rdStreamName(st))}</b>${total != null ? `<span class="muted small">${total ? `${total} non lu${total > 1 ? 's' : ''}` : 'tout est lu'}</span>` : ''}</div>
+    <input class="input rd-q" type="search" placeholder="Rechercher dans la liste…" value="${esc(st.q)}" data-rq>
+    <div class="seg">
+      <button type="button" class="btn sm ${st.filter === 'unread' ? 'on' : ''}" data-rf="unread">Non lus</button>
+      <button type="button" class="btn sm ${st.filter === 'all' ? 'on' : ''}" data-rf="all">Tous</button>
+    </div>
+    ${canEdit() && st.stream !== 'starred' ? '<button type="button" class="btn sm" data-rb="readall" title="Marquer comme lus tous les articles de ce flux">✓<span class="lbl"> Tout lu</span></button>' : ''}
+    <button type="button" class="btn sm" data-rb="refresh" title="Actualiser (r)">↻</button>`;
+}
+function rdPaint(w, el, parts = 'all') {
+  const st = rdState(w);
+  const dyn = $('.w-dyn', el);
+  let root = $('.rd', dyn);
+  if (!root) {
+    dyn.innerHTML = `<div class="rd"><div class="rd-bar"></div><div class="rd-main">
+      <aside class="rd-side"></aside><div class="rd-list"></div><section class="rd-view"></section></div><div class="rd-errs"></div></div>`;
+    root = $('.rd', dyn);
+    rdBindScroll(w, el, root);
+  }
+  const all = parts === 'all';
+  root.classList.toggle('reading', !!st.sel);
+  root.classList.toggle('side-open', st.side);
+  if (all || parts.includes('bar')) {
+    const q = $('[data-rq]', root), focused = document.activeElement === q, pos = q?.selectionStart;
+    $('.rd-bar', root).innerHTML = rdBarHtml(w, st);
+    if (focused) { const n = $('[data-rq]', root); n.focus(); n.setSelectionRange(pos, pos); }
+  }
+  if (all || parts.includes('side')) { const s = $('.rd-side', root), y = s.scrollTop; s.innerHTML = rdSideHtml(st); s.scrollTop = y; }
+  if (all || parts.includes('list')) {
+    const l = $('.rd-list', root), y = l.scrollTop;
+    l.innerHTML = rdListHtml(w, st);
+    l.scrollTop = y;
+    rdObserve(w, el, l);
+    // liste plus courte que la colonne : on charge la suite sans attendre un défilement impossible
+    if (!st.q && st.cont && !st.loading && l.scrollHeight <= l.clientHeight + 40) setTimeout(() => rdMore(w, el), 0);
+  }
+  if (all || parts.includes('view')) { $('.rd-view', root).innerHTML = rdViewHtml(st); }
+}
+function rdBindScroll(w, el, root) {
+  const st = rdState(w);
+  const l = $('.rd-list', root);
+  l.addEventListener('scroll', () => {
+    if (st.cont && !st.loading && l.scrollTop + l.clientHeight > l.scrollHeight - 300) rdMore(w, el);
+  });
+}
+function rdObserve(w, el, list) {
+  const st = rdState(w);
+  st.obs?.disconnect();
+  if (!(w.config?.markOnScroll && canEdit())) return;
+  st.obs = new IntersectionObserver(entries => {
+    for (const en of entries) {
+      if (en.isIntersecting || !en.rootBounds || en.boundingClientRect.bottom > en.rootBounds.top + 4) continue;
+      const it = st.items[Number(en.target.dataset.rk)];
+      if (it && !it.read) rdMark(w, el, [it], true);
+    }
+  }, { root: list, threshold: 0 });
+  $$('.rd-item:not(.read)', list).forEach(a => st.obs.observe(a));
+}
+async function rdMore(w, el) {
+  const st = rdState(w);
+  if (!st.cont || st.loading) return;
+  st.loading = true;
+  try {
+    const d = await api(`/widgets/${pageOf(w)}/${w.id}${RENDER.reader.query(w)}&c=${encodeURIComponent(st.cont)}`);
+    const add = (d.items || []).filter(i => !st.ids.has(i.id));
+    add.forEach(i => st.ids.add(i.id));
+    st.items.push(...add);
+    st.cont = d.continuation || null;
+    rdPaint(w, el, ['list']);
+  } catch (e) { toast(e.message, true); }
+  st.loading = false;
+}
+// change le compteur de non lus d'un article dans l'arborescence (abonnement, catégorie, total)
+function rdBump(st, it, delta) {
+  const { f, c } = rdFeed(st, it.feedId);
+  if (f) f.unread = Math.max(0, f.unread + delta);
+  if (c) c.unread = Math.max(0, c.unread + delta);
+  if (st.tree) st.tree.unread = Math.max(0, (st.tree.unread || 0) + delta);
+}
+function rdSend(w, op, ids) {
+  const st = rdState(w);
+  return api(`/widgets/${pageOf(w)}/${w.id}/action`, { method: 'POST', body: { op, integrationId: st.intId, ids } })
+    .catch(e => toast(`FreshRSS : ${e.message}`, true));
+}
+function rdMark(w, el, items, read) {
+  if (!canEdit()) return;
+  const st = rdState(w);
+  const ch = items.filter(i => !!i.read !== read);
+  if (!ch.length) return;
+  ch.forEach(i => { i.read = read; rdBump(st, i, read ? -1 : 1); st.queue.set(i.id, read); });
+  ch.forEach(i => {
+    const row = $(`.rd-item[data-rk="${st.items.indexOf(i)}"]`, el);
+    if (!row) return;
+    row.classList.toggle('read', read);
+    if (read) $('.unread-dot', row)?.remove();
+    else if (!$('.unread-dot', row)) $('.rd-t', row).insertAdjacentHTML('afterbegin', '<i class="unread-dot"></i>');
+  });
+  rdPaint(w, el, ['bar', 'side']);
+  clearTimeout(st.flushT);
+  st.flushT = setTimeout(() => rdFlush(w), 800);
+}
+// envoie à FreshRSS les articles marqués lus / non lus en attente
+function rdFlush(w) {
+  const st = rdState(w);
+  clearTimeout(st.flushT);
+  const r = [], u = [];
+  for (const [id, v] of st.queue) (v ? r : u).push(id);
+  st.queue.clear();
+  return Promise.all([r.length && rdSend(w, 'read', r), u.length && rdSend(w, 'unread', u)]);
+}
+function rdStar(w, el, it) {
+  if (!canEdit() || !it) return;
+  it.starred = !it.starred;
+  rdSend(w, it.starred ? 'star' : 'unstar', [it.id]);
+  const k = st => st.items.indexOf(it);
+  const st = rdState(w);
+  const b = $(`[data-rstar="${k(st)}"]`, el);
+  if (b) b.classList.toggle('on', it.starred);
+  if (st.sel === it.id) rdPaint(w, el, ['view']);
+  toast(it.starred ? 'Ajouté aux favoris ★' : 'Retiré des favoris');
+}
+function rdOpen(w, el, it, scroll = true) {
+  const st = rdState(w);
+  if (!it) return;
+  st.sel = it.id;
+  $$('.rd-item.sel', el).forEach(x => x.classList.remove('sel'));
+  const row = $(`.rd-item[data-rk="${st.items.indexOf(it)}"]`, el);
+  row?.classList.add('sel');
+  if (scroll) row?.scrollIntoView({ block: 'nearest' });
+  rdMark(w, el, [it], true);
+  rdPaint(w, el, ['view']);
+  $('.rd', el)?.classList.add('reading');
+  $('.rd-scroll', el)?.scrollTo(0, 0);
+}
+function rdStep(w, el, dir) {
+  const st = rdState(w);
+  const vis = rdVisible(st).map(([i]) => i);
+  if (!vis.length) return;
+  const cur = vis.findIndex(i => i.id === st.sel);
+  const next = vis[cur < 0 ? 0 : Math.min(vis.length - 1, Math.max(0, cur + dir))];
+  rdOpen(w, el, next);
+  if (dir > 0 && vis.indexOf(next) > vis.length - 4) rdMore(w, el);
+}
+async function rdSwitch(w, el, patch) {
+  const st = rdState(w);
+  const pending = st.queue.size ? rdFlush(w) : null;
+  Object.assign(st, patch, { items: [], ids: new Set(), cont: null, sel: null, ready: false, q: '', side: false });
+  rdSave(w);
+  rdPaint(w, el);
+  await pending; // les marquages en attente partent avant de recharger la liste
+  loadWidget(w);
+}
+
+// un seul écouteur clavier pour tous les lecteurs : il agit sur celui de l'onglet affiché
+let RD_KEYS = false;
+function rdKeys() {
+  if (RD_KEYS) return;
+  RD_KEYS = true;
+  document.addEventListener('keydown', e => {
+    if (e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable || $('.overlay')) return;
+    const el = $('.widget[data-wid] .rd')?.closest('.widget');
+    if (!el) return;
+    const w = page()?.widgets.find(x => x.id === el.dataset.wid);
+    if (!w) return;
+    const st = rdState(w);
+    const it = st.items.find(i => i.id === st.sel);
+    const k = e.key;
+    if (k === 'j' || k === 'ArrowDown' && e.shiftKey) { e.preventDefault(); rdStep(w, el, 1); }
+    else if (k === 'k' || k === 'ArrowUp' && e.shiftKey) { e.preventDefault(); rdStep(w, el, -1); }
+    else if (k === 's' && it) rdStar(w, el, it);
+    else if (k === 'm' && it) { rdMark(w, el, [it], !it.read); rdPaint(w, el, ['view']); }
+    else if ((k === 'o' || k === 'v') && it?.link) window.open(safeUrl(it.link), '_blank', 'noopener');
+    else if (k === 'p' && it) { e.preventDefault(); shareDialog(w, it); }
+    else if (k === 'r') loadWidget(w);
+    else if (k === 'Escape' && st.sel) { st.sel = null; rdPaint(w, el, ['view']); $('.rd', el)?.classList.remove('reading'); }
+  });
+}
+
+// hauteur « pleine fenêtre » : le lecteur occupe l'écran sous les onglets
+const rdFill = w => w.type === 'reader' && w.config?.fill !== false;
+function rdFillPx() {
+  const g = $('#grid');
+  const top = g ? g.getBoundingClientRect().top + window.scrollY : 190;
+  // téléphone : tout l'écran (on fait défiler l'en-tête), sinon l'espace restant sous les onglets
+  return MOBILE.matches ? window.innerHeight - 24 : Math.max(420, window.innerHeight - top - 22);
+}
+function rdFitAll() {
+  if (!GRID) return;
+  for (const w of page()?.widgets || []) {
+    if (!rdFill(w)) continue;
+    const item = $(`.grid-stack-item[gs-id="${w.id}"]`);
+    if (item) GRID.update(item, { h: rowsFor(rdFillPx()) });
+  }
+}
+let RD_RESIZE = null;
+window.addEventListener('resize', () => { clearTimeout(RD_RESIZE); RD_RESIZE = setTimeout(rdFitAll, 120); });
+
+// ---------- partage d'un article sur les réseaux sociaux (texte modifiable avant publication) ----------
+// Chaque réseau ouvre sa propre fenêtre de publication avec le texte déjà rempli : rien n'est publié depuis le dashboard.
+const SHARE_NETS = [
+  { key: 'X', opt: 'shareX', label: 'X', max: 280, urlLen: 23, color: '#8b98a5',
+    href: t => `https://x.com/intent/tweet?text=${encodeURIComponent(t)}` },
+  { key: 'Mastodon', opt: 'shareMastodon', label: 'Mastodon', max: 500, urlLen: 23, color: '#8c8dff',
+    href: (t, inst) => (inst ? `https://${inst}/share?text=${encodeURIComponent(t)}` : '') },
+  { key: 'Threads', opt: 'shareThreads', label: 'Threads', max: 500, color: '#c9c9c9',
+    href: t => `https://www.threads.com/intent/post?text=${encodeURIComponent(t)}` },
+  { key: 'Bluesky', opt: 'shareBluesky', label: 'Bluesky', max: 300, color: '#3b9dff',
+    href: t => `https://bsky.app/intent/compose?text=${encodeURIComponent(t)}` }
+];
+const URL_RE = /https?:\/\/[^\s]+/g;
+function shareLen(text, net) {
+  // X et Mastodon comptent chaque lien pour 23 caractères ; Bluesky et Threads comptent le texte entier
+  const t = net.urlLen ? text.replace(URL_RE, 'x'.repeat(net.urlLen)) : text;
+  try { return [...new Intl.Segmenter('fr', { granularity: 'grapheme' }).segment(t)].length; } catch { return [...t].length; }
+}
+const cleanInstance = v => String(v || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase();
+function shareText(w, it) {
+  const tpl = w.config?.shareTemplate || '{titre} - {lien}';
+  return tpl.replace(/\{titre\}/g, it.title || '').replace(/\{lien\}/g, it.link || '').replace(/\{source\}/g, it.source || '').trim();
+}
+function shareDialog(w, it) {
+  if (!it) return;
+  const c = w.config || {};
+  const nets = SHARE_NETS.filter(n => c[n.opt] !== false);
+  if (!nets.length) { toast('Aucun réseau activé pour le partage (⚙ du lecteur)', true); return; }
+  const base = shareText(w, it);
+  const texts = Object.fromEntries(nets.map(n => [n.key, base]));
+  const own = new Set(); // réseaux dont le texte a été adapté à part
+  let inst = cleanInstance(localStorageGet('share_mastodon') || c.mastodonInstance);
+  const m = modal({
+    title: 'Partager l\'article',
+    body: `<div class="share">
+      <div class="share-art">${rdImg(it.image) ? `<img src="${esc(it.image)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
+        <div><b>${esc(it.title)}</b><div class="muted small">${esc(it.source || '')} · <span class="mono">${esc((it.link || '').replace(/^https?:\/\//, '').slice(0, 70))}</span></div></div></div>
+      <label class="share-main">Texte du message<textarea data-sh="all" rows="4">${esc(base)}</textarea></label>
+      <div class="help">Modifie le texte ici, puis clique sur un réseau : sa fenêtre de publication s'ouvre avec ce texte, et tu valides (ou retouches encore) là-bas. « Adapter » donne un texte propre à un réseau.</div>
+      <div class="share-nets">${nets.map(n => `
+        <div class="share-net" data-net="${n.key}" style="--nc:${n.color}">
+          <div class="share-row">
+            <span class="share-name">${n.label}</span>
+            <span class="share-cnt small" data-cnt></span>
+            <button type="button" class="btn sm" data-adapt>Adapter</button>
+            <a class="btn sm primary share-go" data-go target="_blank" rel="noopener">Publier sur ${n.label} ↗</a>
+          </div>
+          ${n.key === 'Mastodon' ? `<div class="share-inst"><span class="muted small">Instance</span><input class="input" data-inst placeholder="mastodon.social" value="${esc(inst)}"></div>` : ''}
+          <textarea data-sh="${n.key}" rows="3" hidden></textarea>
+        </div>`).join('')}</div>
+    </div>`,
+    footer: '<button class="btn" data-copy>📋 Copier le texte</button><button class="btn primary" data-close2>Fermer</button>'
+  });
+  const main = $('[data-sh=all]', m.el);
+  const refresh = () => {
+    for (const n of nets) {
+      const box = $(`[data-net="${n.key}"]`, m.el);
+      const t = texts[n.key];
+      const len = shareLen(t, n);
+      const cnt = $('[data-cnt]', box);
+      cnt.textContent = `${len} / ${n.max}`;
+      cnt.className = `share-cnt small ${len > n.max ? 'over' : len > n.max * 0.9 ? 'near' : ''}`;
+      const go = $('[data-go]', box);
+      const href = n.href(t, inst);
+      const bad = !t.trim() || len > n.max || !href;
+      go.classList.toggle('disabled', bad);
+      if (bad) go.removeAttribute('href'); else go.href = href;
+      go.title = !href ? 'Indique d\'abord ton instance Mastodon' : len > n.max ? `Trop long pour ${n.label} : raccourcis le texte` : `Ouvre ${n.label} avec ce texte`;
+      $('[data-adapt]', box).textContent = own.has(n.key) ? 'Reprendre le texte commun' : 'Adapter';
+    }
+  };
+  main.addEventListener('input', () => { for (const n of nets) if (!own.has(n.key)) texts[n.key] = main.value; refresh(); });
+  m.el.addEventListener('input', e => {
+    const k = e.target.dataset.sh;
+    if (k && k !== 'all') { texts[k] = e.target.value; refresh(); }
+    if (e.target.matches('[data-inst]')) { inst = cleanInstance(e.target.value); localStorageSet('share_mastodon', inst); refresh(); }
+  });
+  m.el.addEventListener('click', e => {
+    const ad = e.target.closest('[data-adapt]');
+    if (ad) {
+      const box = ad.closest('[data-net]'), k = box.dataset.net, ta = $('textarea', box);
+      if (own.has(k)) { own.delete(k); texts[k] = main.value; ta.hidden = true; }
+      else { own.add(k); ta.value = texts[k]; ta.hidden = false; ta.focus(); }
+      refresh();
+      return;
+    }
+    const go = e.target.closest('[data-go]');
+    if (go?.classList.contains('disabled')) { e.preventDefault(); toast(go.title, true); }
+  });
+  $('[data-copy]', m.el).onclick = async () => {
+    try { await navigator.clipboard.writeText(main.value); toast('Texte copié ✓'); }
+    catch { main.select(); toast('Sélectionné : Ctrl+C pour copier'); }
+  };
+  $('[data-close2]', m.el).onclick = m.close;
+  refresh();
+  main.focus();
+  main.setSelectionRange(main.value.length, main.value.length);
+}
+
 // ---------- météo : pictogrammes au trait et couleurs de température ----------
 function tempColor(t) {
   const stops = [[-10, [110, 160, 255]], [0, [120, 190, 235]], [8, [120, 205, 200]], [15, [130, 215, 150]], [22, [235, 215, 110]], [28, [245, 165, 85]], [35, [235, 95, 85]]];
@@ -1212,6 +1637,92 @@ const RENDER = {
         st.items = st.items.map(i => (byId.has(i.id || i.link) ? { ...byId.get(i.id || i.link), read: i.read || byId.get(i.id || i.link).read } : i));
       }
       rssPaint(w, el, d.errors);
+      return undefined;
+    }
+  },
+
+  reader: {
+    query(w) {
+      const st = rdState(w);
+      return `?s=${encodeURIComponent(st.stream)}&f=${st.filter}`;
+    },
+    bind(w, el) {
+      rdKeys();
+      const st = rdState(w);
+      el.addEventListener('input', e => {
+        if (!e.target.matches('[data-rq]')) return;
+        st.q = e.target.value;
+        rdPaint(w, el, ['list']);
+      });
+      el.addEventListener('click', async e => {
+        const t = e.target;
+        const star = t.closest('[data-rstar]');
+        if (star) { e.stopPropagation(); rdStar(w, el, st.items[Number(star.dataset.rstar)]); return; }
+        const sh = t.closest('[data-rshare]');
+        if (sh) { e.stopPropagation(); shareDialog(w, st.items[Number(sh.dataset.rshare)]); return; }
+        const s = t.closest('[data-rs]');
+        if (s) { if (s.dataset.rs !== st.stream || st.side) rdSwitch(w, el, { stream: s.dataset.rs }); return; }
+        const tw = t.closest('[data-rtw]');
+        if (tw) {
+          const id = tw.dataset.rtw;
+          if (st.collapsed.has(id)) st.collapsed.delete(id); else st.collapsed.add(id);
+          rdSave(w);
+          rdPaint(w, el, ['side']);
+          return;
+        }
+        const f = t.closest('[data-rf]');
+        if (f) { if (f.dataset.rf !== st.filter) rdSwitch(w, el, { filter: f.dataset.rf }); return; }
+        const row = t.closest('.rd-item');
+        if (row) { rdOpen(w, el, st.items[Number(row.dataset.rk)], false); return; }
+        const b = t.closest('[data-rb]');
+        if (!b) return;
+        const it = st.items.find(i => i.id === st.sel);
+        switch (b.dataset.rb) {
+          case 'back': st.sel = null; $('.rd', el).classList.remove('reading'); rdPaint(w, el, ['view']); $$('.rd-item.sel', el).forEach(x => x.classList.remove('sel')); break;
+          case 'star': rdStar(w, el, it); break;
+          case 'toggle': if (it) { rdMark(w, el, [it], !it.read); rdPaint(w, el, ['view']); } break;
+          case 'prev': rdStep(w, el, -1); break;
+          case 'more': rdMore(w, el); break;
+          case 'share': shareDialog(w, it); break;
+          case 'next': rdStep(w, el, 1); break;
+          case 'refresh': await rdFlush(w); loadWidget(w); break;
+          case 'side': st.side = !st.side; $('.rd', el).classList.toggle('side-open', st.side); break;
+          case 'readall': {
+            const name = rdStreamName(st);
+            if (!confirm(`Marquer comme lus tous les articles de « ${name} » ?`)) return;
+            try {
+              await api(`/widgets/${pageOf(w)}/${w.id}/action`, { method: 'POST', body: { op: 'readall', integrationId: st.intId, stream: st.stream, ts: st.loadedAt } });
+              st.items.forEach(i => { i.read = true; });
+              toast(`« ${name} » : tout est lu ✓`);
+              loadWidget(w);
+            } catch (err) { toast(`FreshRSS : ${err.message}`, true); }
+            break;
+          }
+        }
+      });
+    },
+    dyn(d, w, el) {
+      const st = rdState(w);
+      if (d.stream && (d.stream !== st.stream || d.filter !== st.filter)) return undefined; // réponse d'un ancien filtre
+      if (d.offline) { $('.w-dyn', el).innerHTML = `<div class="w-err">FreshRSS injoignable</div>${errorsHtml(d.errors)}`; return undefined; }
+      st.intId = d.integrationId;
+      if (d.tree) st.tree = d.tree;
+      st.loadedAt = d.loadedAt || st.loadedAt;
+      const items = d.items || [];
+      const first = !st.ready;
+      if (first) {
+        st.items = items; st.ids = new Set(items.map(i => i.id)); st.cont = d.continuation || null;
+      } else {
+        // rafraîchissement : les nouveaux articles arrivent en tête, ceux déjà chargés gardent leur état local
+        const fresh = items.filter(i => !st.ids.has(i.id));
+        fresh.forEach(i => st.ids.add(i.id));
+        const desc = w.config?.order !== 'Plus anciens d\'abord';
+        st.items = desc ? [...fresh, ...st.items] : [...st.items, ...fresh];
+      }
+      st.ready = true;
+      rdPaint(w, el, first ? 'all' : ['bar', 'side', 'list']);
+      const er = $('.rd-errs', el);
+      if (er) er.innerHTML = errorsHtml(d.errors);
       return undefined;
     }
   },
@@ -1641,17 +2152,39 @@ function editTab(pg) {
     title: pg ? 'Modifier l\'onglet' : 'Nouvel onglet',
     body: `<form class="form" id="tabForm"><div class="row2">
       <label>Nom<input name="name" value="${esc(pg?.name || '')}" required maxlength="40"></label>
-      <label>Icône (emoji, optionnel)<input name="icon" value="${esc(pg?.icon || '')}" maxlength="8" placeholder="🏠"></label></div></form>`,
+      <label>Icône (emoji, optionnel)<input name="icon" value="${esc(pg?.icon || '')}" maxlength="8" placeholder="🏠"></label></div>
+      ${pg ? '' : `<label>Contenu de départ<select name="tpl">
+        <option value="">Onglet vide</option>
+        <option value="reader">Lecteur RSS (FreshRSS) en pleine page</option>
+      </select></label>
+      <div class="help" data-tplhelp hidden>${(() => {
+        const n = S.integrations.filter(i => S.meta.integrations[i.type]?.provides.includes('reader')).length;
+        return n ? 'Le lecteur sera branché sur ta première intégration FreshRSS (modifiable avec ⚙).' : 'Aucune intégration FreshRSS pour l\'instant : ajoute-la dans ⚙ Administration → Intégrations, puis choisis-la dans le ⚙ du lecteur.';
+      })()}</div>`}</form>`,
     footer: `${pg ? '<button class="btn danger" data-del style="margin-right:auto">Supprimer l\'onglet</button>' : ''}
       <button class="btn" data-close2>Annuler</button><button class="btn primary" data-ok>Enregistrer</button>`
   });
   $('[data-close2]', m.el).onclick = m.close;
+  const tpl = $('[name=tpl]', m.el);
+  tpl?.addEventListener('change', () => {
+    $('[data-tplhelp]', m.el).hidden = !tpl.value;
+    const n = $('[name=name]', m.el), ic = $('[name=icon]', m.el);
+    if (tpl.value === 'reader') { if (!n.value.trim()) n.value = 'Lecture'; if (!ic.value.trim()) ic.value = '📖'; }
+  });
   $('[data-ok]', m.el).onclick = () => {
     const f = Object.fromEntries(new FormData($('#tabForm', m.el)));
     if (!f.name.trim()) return;
     if (pg) Object.assign(pg, { name: f.name.trim(), icon: f.icon.trim() });
     else {
       const np = { id: uid(), name: f.name.trim(), icon: f.icon.trim(), widgets: [] };
+      if (f.tpl === 'reader') {
+        const d = S.meta.widgets.reader;
+        const src = S.integrations.find(i => i.type === 'freshrss') || S.integrations.find(i => S.meta.integrations[i.type]?.provides.includes('reader'));
+        np.widgets.push({
+          id: uid(), type: 'reader', title: 'Lecteur RSS', w: 12, x: 0, y: 0, refresh: d.refresh, integrations: src ? [src.id] : [],
+          config: Object.fromEntries((d.options || []).filter(o => o.default !== undefined).map(o => [o.key, o.default]))
+        });
+      }
       S.dash.pages.push(np);
       S.pageId = np.id;
       history.replaceState(null, '', '#/' + np.id);
