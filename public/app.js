@@ -575,6 +575,13 @@ function calMonth(evs, st) {
     </div>`;
 }
 
+// ---------- conteneurs Docker : tri et suivi des mises à jour ----------
+const jobActive = c => ['queued', 'pulling', 'recreating'].includes(c.job?.state);
+function dockSort(w) {
+  try { const v = JSON.parse(localStorageGet('hd_dsort_' + w.id) || 'null'); if (v?.sort) return { sort: v.sort, dir: v.dir === -1 ? -1 : 1 }; } catch { /* rien */ }
+  return { sort: 'host', dir: 1 };
+}
+
 // ---------- mises à jour apt (agent Mon dashboard) ----------
 function aptBar(d, w) {
   const a = d.apt;
@@ -1465,16 +1472,52 @@ const RENDER = {
   },
 
   docker: {
+    query: w => (S.dockLive?.[w.id] ? '?live=1' : ''),
     static: w => `<div class="toolbar"><input class="input" data-filter placeholder="Filtrer (nom, image, hôte)…" style="flex:1;min-width:180px">
-      <label class="small muted"><input type="checkbox" data-stopped ${w.config?.onlyStopped ? 'checked' : ''}> Arrêtés uniquement</label></div>`,
+      <label class="small muted"><input type="checkbox" data-stopped ${w.config?.onlyStopped ? 'checked' : ''}> Arrêtés uniquement</label>
+      <label class="small muted"><input type="checkbox" data-upd-only> Mises à jour uniquement</label></div>`,
     bind(w, el) {
-      const f = S.filters[w.id] ||= { q: '', stopped: !!w.config?.onlyStopped };
-      const inp = $('[data-filter]', el), chk = $('[data-stopped]', el);
-      inp.value = f.q; chk.checked = f.stopped;
+      const f = S.filters[w.id] ||= { q: '', stopped: !!w.config?.onlyStopped, upd: false, ...dockSort(w) };
+      const inp = $('[data-filter]', el), chk = $('[data-stopped]', el), upd = $('[data-upd-only]', el);
+      inp.value = f.q; chk.checked = f.stopped; upd.checked = f.upd;
       const re = () => S.cache[w.id] && paintWidget(w, S.cache[w.id]);
       inp.addEventListener('input', () => { f.q = inp.value.toLowerCase(); re(); });
       chk.addEventListener('change', () => { f.stopped = chk.checked; re(); });
+      upd.addEventListener('change', () => { f.upd = upd.checked; re(); });
       el.addEventListener('click', async e => {
+        // tri par colonne (mémorisé sur l'appareil)
+        const th = e.target.closest('[data-sort]');
+        if (th) {
+          const k = th.dataset.sort;
+          f.dir = f.sort === k ? -f.dir : 1; f.sort = k;
+          localStorageSet('hd_dsort_' + w.id, JSON.stringify({ sort: f.sort, dir: f.dir }));
+          return re();
+        }
+        // mise à jour de l'image : un conteneur ou tous
+        const u = e.target.closest('[data-cupd]');
+        if (u) {
+          const all = (S.cache[w.id]?.containers || []);
+          const targets = u.dataset.cupd === 'all'
+            ? all.filter(c => c.imageUpdate && c.canUpdate && !jobActive(c) && !/mondashboard-agent|homedash-agent/.test(c.image))
+                .sort((a, b) => /mondashboard/.test(a.image) - /mondashboard/.test(b.image))
+            : all.filter(c => c.id === u.dataset.cid);
+          if (!targets.length) return;
+          const msg = targets.length === 1
+            ? `Mettre à jour « ${targets[0].name} » (${targets[0].host}) ?\n\nLa nouvelle image est téléchargée puis le conteneur est recréé avec la même configuration (volumes, ports, réseaux, variables). En cas d'échec, l'ancien est remis en place.`
+            : `Mettre à jour ${targets.length} conteneurs ?\n\n${targets.map(c => `• ${c.name} (${c.host})`).join('\n')}\n\nChaque machine les traite un par un. En cas d'échec, l'ancien conteneur est remis en place.`;
+          if (!confirm(msg)) return;
+          u.disabled = true;
+          let ok = 0; const fails = [];
+          for (const c of targets) {
+            try { await api(`/widgets/${pageOf(w)}/${w.id}/action`, { method: 'POST', body: { integrationId: c.integrationId, containerId: c.id, op: 'update' } }); ok++; c.job = { state: 'queued', at: new Date().toISOString() }; }
+            catch (err) { fails.push(`${c.name} : ${err.message}`); }
+          }
+          toast(fails.length ? `${ok} lancée(s), ${fails.length} refusée(s) — ${fails[0]}` : `${ok} mise(s) à jour lancée(s) : suivi dans la colonne État`, !!fails.length);
+          (S.dockLive ||= {})[w.id] = true;
+          re();
+          setTimeout(() => loadWidget(w), 2000);
+          return;
+        }
         const b = e.target.closest('[data-op]');
         if (!b) return;
         const verb = { start: 'Démarrer', stop: 'Arrêter', restart: 'Redémarrer' }[b.dataset.op];
@@ -1492,14 +1535,43 @@ const RENDER = {
       });
     },
     dyn(d, w) {
-      const f = S.filters[w.id] || { q: '', stopped: false };
+      const f = S.filters[w.id] || { q: '', stopped: false, upd: false, ...dockSort(w) };
       const all = d.containers || [];
       const running = all.filter(c => c.state === 'running').length;
       const outdated = all.filter(c => c.imageUpdate).length;
-      const list = all.filter(c => (!f.stopped || c.state !== 'running')
+      const updatable = all.filter(c => c.imageUpdate && c.canUpdate && !jobActive(c) && !/mondashboard-agent|homedash-agent/.test(c.image)).length;
+      // tri : clé choisie, puis hôte, puis nom
+      const ST = { running: 0, restarting: 1, paused: 2, created: 3, exited: 4, dead: 5 };
+      const val = {
+        host: c => c.host.toLowerCase(), name: c => c.name.toLowerCase(),
+        update: c => (jobActive(c) ? 0 : c.imageUpdate ? 1 : c.imageUpdate === false ? 2 : 3),
+        state: c => (jobActive(c) ? -1 : ST[c.state] ?? 9)
+      }[f.sort] || (c => c.host);
+      const cmp = (a, b) => { const x = val(a), y = val(b); return x < y ? -1 : x > y ? 1 : 0; };
+      const list = all.filter(c => (!f.stopped || c.state !== 'running') && (!f.upd || c.imageUpdate || jobActive(c))
         && (!f.q || `${c.name} ${c.image} ${c.host}`.toLowerCase().includes(f.q)))
-        .sort((a, b) => a.host.localeCompare(b.host) || (a.state === 'running') - (b.state === 'running') || a.name.localeCompare(b.name));
-      const actions = c => (c.canAct && canEdit() ? `
+        .sort((a, b) => cmp(a, b) * f.dir || a.host.localeCompare(b.host) || a.name.localeCompare(b.name));
+      const th = (k, label) => `<th data-sort="${k}" class="sortable ${f.sort === k ? 'on' : ''}" title="Trier">${label}${f.sort === k ? (f.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
+      // suivi des mises à jour en cours : on rafraîchit vite tant qu'il y en a
+      (S.dockLive ||= {})[w.id] = all.some(jobActive);
+      if (S.dockLive[w.id]) { clearTimeout(S.dockPoll?.[w.id]); (S.dockPoll ||= {})[w.id] = setTimeout(() => loadWidget(w), 4000); }
+      const jobCell = c => {
+        const j = c.job; if (!j) return '';
+        const age = Date.now() - Date.parse(j.at || 0);
+        if (j.state === 'queued') return '<span class="st-restarting">◌ <span class="small">En attente de mise à jour…</span></span>';
+        if (j.state === 'pulling') return '<span class="st-restarting">⬇ <span class="small">Téléchargement de l\'image…</span></span>';
+        if (j.state === 'recreating') return '<span class="st-restarting">♻ <span class="small">Recréation du conteneur…</span></span>';
+        if (j.state === 'error' && age < 30 * 60e3) return `<span class="st-exited" title="${esc(j.error || '')}">✗ <span class="small">Échec de la mise à jour</span></span><div class="small muted ellip" style="max-width:260px" title="${esc(j.error || '')}">${esc(j.error || '')}</div>`;
+        if (j.state === 'done' && age < 15 * 60e3) return `<div class="small" style="color:var(--ok)">✓ ${j.note ? esc(j.note) : 'mis à jour'}</div>`;
+        return '';
+      };
+      const updChip = c => {
+        if (!c.imageUpdate || jobActive(c)) return '';
+        return c.canUpdate && canEdit() && !/mondashboard-agent|homedash-agent/.test(c.image)
+          ? `<button class="chip warn chip-btn" data-cupd="one" data-cid="${c.id}" title="Mettre à jour ce conteneur">⬆ MAJ</button>`
+          : `<span class="chip warn" style="margin-right:6px" title="${/mondashboard-agent|homedash-agent/.test(c.image) ? 'Mets à jour l\'agent depuis sa stack (Dockhand)' : 'Nouvelle version disponible'}">⬆ MAJ</span>`;
+      };
+      const actions = c => (c.canAct && canEdit() && !jobActive(c) ? `
         <span style="white-space:nowrap">${c.state === 'running'
           ? `<button class="iconbtn" data-op="restart" data-cid="${c.id}" data-int="${c.integrationId}" data-name="${esc(c.name)}" title="Redémarrer">↻</button>
              <button class="iconbtn" data-op="stop" data-cid="${c.id}" data-int="${c.integrationId}" data-name="${esc(c.name)}" title="Arrêter">■</button>`
@@ -1507,14 +1579,15 @@ const RENDER = {
       const noActs = canEdit() && all.length && !all.some(c => c.canAct)
         ? '<div class="help" style="margin-bottom:8px">Actions indisponibles sur ces sources. Pour démarrer / arrêter / redémarrer, installe l\'agent Mon dashboard sur la machine (⚙ Administration → Intégrations → Agent Mon dashboard) avec « Autoriser start / stop / restart », puis sélectionne-le dans ce widget.</div>' : '';
       return `${noActs}
-        <div class="muted small" style="margin-bottom:6px">${all.length} conteneur(s) · <span class="st-running">${running} actif(s)</span> · <span class="st-exited">${all.length - running} arrêté(s)</span>${outdated ? ` · <span style="color:var(--warn)">⬆ ${outdated} image(s) à mettre à jour</span>` : ''}</div>
+        <div class="dk-sum muted small"><span>${all.length} conteneur(s) · <span class="st-running">${running} actif(s)</span> · <span class="st-exited">${all.length - running} arrêté(s)</span>${outdated ? ` · <span style="color:var(--warn)">⬆ ${outdated} image(s) à mettre à jour</span>` : ''}</span>
+          ${updatable > 1 && canEdit() ? `<button class="btn sm" data-cupd="all">⬆ Tout mettre à jour (${updatable})</button>` : ''}</div>
         <div style="overflow-x:auto"><table class="tbl">
-          <thead><tr><th>Hôte</th><th>Conteneur</th><th>Image</th><th>État</th><th></th></tr></thead>
+          <thead><tr>${th('host', 'Hôte')}${th('name', 'Conteneur')}${th('update', 'Image / MAJ')}${th('state', 'État')}<th></th></tr></thead>
           <tbody>${list.map(c => `<tr>
             <td><span class="host-pill">${esc(c.host)}</span></td>
             <td><b>${esc(c.name)}</b></td>
-            <td class="ellip muted mono" title="${esc(c.image)}${c.imageUpdate ? ' — nouvelle version disponible' : ''}">${c.imageUpdate ? '<span class="chip warn" style="margin-right:6px">⬆ MAJ</span>' : ''}${esc(c.image)}</td>
-            <td class="st-cell st-${esc(c.state)}">● <span class="small">${esc(c.status)}</span></td>
+            <td class="ellip muted mono" title="${esc(c.image)}${c.imageUpdate ? ' — nouvelle version disponible' : ''}">${updChip(c)}${esc(c.image)}</td>
+            <td class="st-cell st-${esc(c.state)}">${jobActive(c) ? jobCell(c) : `● <span class="small">${esc(c.status)}</span>${jobCell(c)}`}</td>
             <td style="text-align:right">${actions(c)}</td></tr>`).join('')
             || '<tr><td colspan="5" class="empty">Aucun conteneur</td></tr>'}</tbody>
         </table></div>`;

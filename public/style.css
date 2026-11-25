@@ -655,3 +655,10 @@ kbd { font: 11.5px ui-monospace, monospace; background: var(--bg2); border: 1px 
 .share-inst { display: flex; align-items: center; gap: 10px; }
 .share-inst .input { flex: 1; max-width: 280px; }
 .btn.sm.primary { color: var(--on-accent); }
+
+/* ---------- Docker : tri et mise à jour ---------- */
+.tbl th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.tbl th.sortable:hover, .tbl th.sortable.on { color: var(--accent); }
+.dk-sum { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.chip-btn { cursor: pointer; margin-right: 6px; font: inherit; font-size: 11px; background: transparent; }
+.chip-btn:hover { background: color-mix(in srgb, var(--warn) 18%, transparent); }

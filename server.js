@@ -282,7 +282,8 @@ app.get('/api/widgets/:pageId/:widgetId', requireView, wrap(async req => {
     w = { ...found, config: { ...(found.config || {}), _s: s, _f: f, _c: c || undefined } };
     key = `${found.id}|r|${s}|${f}|${c}`;
   }
-  const ttl = Math.max(2000, w.refresh * 1000 * 0.8);
+  // live=1 : suivi d'une action en cours (mise à jour d'un conteneur…), on ne garde le cache que 2 s
+  const ttl = req.query.live === '1' ? 2000 : Math.max(2000, w.refresh * 1000 * 0.8);
   const c = cache.get(key);
   if (c && Date.now() - c.at < ttl) return c.data;
   const data = await widgetData(w);

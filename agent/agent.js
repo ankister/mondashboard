@@ -12,7 +12,7 @@ const zlib = require('node:zlib');
 const crypto = require('node:crypto');
 const { execFile, spawn } = require('node:child_process');
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const env = (k, d) => (process.env[k] === undefined || process.env[k] === '' ? d : process.env[k]);
 const CFG = {
   token: env('HD_TOKEN', ''),
@@ -427,7 +427,8 @@ async function containers() {
       list: list.map(c => ({
         id: c.Id, name: (c.Names?.[0] || '').replace(/^\//, ''), image: c.Image, imageId: c.ImageID,
         state: c.State, status: c.Status, created: c.Created,
-        imageUpdate: state.imageUpdates[c.Image]?.update ?? null
+        imageUpdate: state.imageUpdates[c.Image]?.update ?? null,
+        job: ctJobs.get((c.Names?.[0] || '').replace(/^\//, '')) || null
       }))
     };
   } catch (e) { return { list: null, error: e.message }; }
@@ -437,6 +438,117 @@ async function dockerAction(id, op) {
   if (!['start', 'stop', 'restart'].includes(op) || !/^[a-f0-9]{12,64}$/.test(id)) throw new Error('Action invalide');
   await docker('POST', `/containers/${id}/${op}`, null, 60000);
   return { ok: true };
+}
+
+// ---------------------------------------------------------------- mise à jour d'un conteneur
+// Comme Watchtower : télécharge la nouvelle image puis recrée le conteneur avec la même
+// configuration (volumes, ports, réseaux, variables, labels compose…). En cas d'échec au
+// démarrage, l'ancien conteneur est remis en place.
+const ctJobs = new Map(); // nom -> { state: queued|pulling|recreating|done|error, error, at, image }
+const ctQueue = [];
+let ctBusy = false;
+function dockerPull(ref) {
+  return new Promise((resolve, reject) => {
+    const r = parseRef(ref);
+    const from = encodeURIComponent(ref.replace(/:[^:/@]+$/, '').replace(/@.*$/, ''));
+    const tag = encodeURIComponent(r?.tag || 'latest');
+    const req = http.request({ socketPath: CFG.dockerSock, path: `/images/create?fromImage=${from}&tag=${tag}`, method: 'POST', timeout: 1800e3 }, res => {
+      let last = '', err = null;
+      res.on('data', c => {
+        for (const line of String(c).split('\n')) {
+          if (!line.trim()) continue;
+          try { const j = JSON.parse(line); if (j.error) err = j.error; last = j.status || last; } catch { /* morceau incomplet */ }
+        }
+      });
+      res.on('end', () => (res.statusCode >= 400 || err ? reject(new Error(`Téléchargement de l'image impossible : ${err || res.statusCode}`)) : resolve(last)));
+    });
+    req.on('timeout', () => req.destroy(new Error('Téléchargement trop long')));
+    req.on('error', reject);
+    req.end();
+  });
+}
+// retire de la config du conteneur ce qui venait de l'ancienne image, pour que la nouvelle s'applique
+function ownConfig(cfg, imgCfg, oldId) {
+  const c = { ...cfg };
+  const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  const imgEnv = new Set(imgCfg?.Env || []);
+  c.Env = (cfg.Env || []).filter(e => !imgEnv.has(e));
+  const imgLabels = imgCfg?.Labels || {};
+  c.Labels = Object.fromEntries(Object.entries(cfg.Labels || {}).filter(([k, v]) => imgLabels[k] !== v));
+  for (const k of ['Cmd', 'Entrypoint', 'WorkingDir', 'User', 'Healthcheck', 'StopSignal']) if (same(cfg[k], imgCfg?.[k])) delete c[k];
+  if (imgCfg?.ExposedPorts && c.ExposedPorts) for (const p of Object.keys(imgCfg.ExposedPorts)) delete c.ExposedPorts[p];
+  if (imgCfg?.Volumes && c.Volumes) for (const v of Object.keys(imgCfg.Volumes)) delete c.Volumes[v];
+  if (c.Hostname && oldId.startsWith(c.Hostname)) delete c.Hostname; // nom d'hôte automatique = id court
+  return c;
+}
+async function recreate(name) {
+  const job = ctJobs.get(name);
+  const old = await docker('GET', `/containers/${encodeURIComponent(name)}/json`);
+  const ref = old.Config.Image;
+  if (/^sha256:|^[a-f0-9]{64}$/.test(ref)) throw new Error('Image sans nom : impossible de savoir quoi télécharger');
+  if (/mondashboard-agent|homedash-agent/.test(ref)) throw new Error('L\'agent ne peut pas se mettre à jour lui-même : mets sa stack à jour dans Dockhand');
+  job.state = 'pulling'; job.image = ref;
+  if (process.env.HD_TEST_NOPULL !== '1') await dockerPull(ref); // tests sans registre
+  const fresh = await docker('GET', `/images/${encodeURIComponent(ref)}/json`);
+  if (fresh.Id === old.Image) { job.state = 'done'; job.note = 'déjà à jour'; return; }
+  job.state = 'recreating';
+  const oldImg = await docker('GET', `/images/${old.Image}/json`).catch(() => null);
+  const wasRunning = old.State?.Running;
+  const hc = old.HostConfig;
+  const nets = Object.entries(old.NetworkSettings?.Networks || {});
+  const netMode = hc.NetworkMode || '';
+  const shared = /^(host|none|container:)/.test(netMode);
+  const endpoint = ([, n]) => ({
+    IPAMConfig: n.IPAMConfig || undefined, Links: n.Links || undefined, MacAddress: n.MacAddress || undefined,
+    Aliases: (n.Aliases || []).filter(a => !old.Id.startsWith(a))
+  });
+  const body = {
+    ...ownConfig(old.Config, oldImg?.Config, old.Id), Image: ref, HostConfig: hc,
+    NetworkingConfig: shared || !nets.length ? undefined : { EndpointsConfig: { [nets[0][0]]: endpoint(nets[0]) } }
+  };
+  const backup = `${name}-ancien-${Date.now().toString(36)}`;
+  if (wasRunning) await docker('POST', `/containers/${old.Id}/stop?t=30`, null, 90000);
+  await docker('POST', `/containers/${old.Id}/rename?name=${encodeURIComponent(backup)}`);
+  let created = null;
+  try {
+    created = await docker('POST', `/containers/create?name=${encodeURIComponent(name)}`, body, 60000);
+    if (!shared) for (const n of nets.slice(1)) await docker('POST', `/networks/${encodeURIComponent(n[0])}/connect`, { Container: created.Id, EndpointConfig: endpoint(n) });
+    if (wasRunning) await docker('POST', `/containers/${created.Id}/start`, null, 60000);
+  } catch (e) {
+    // retour à l'ancien conteneur
+    if (created) await docker('DELETE', `/containers/${created.Id}?force=1`).catch(() => {});
+    await docker('POST', `/containers/${old.Id}/rename?name=${encodeURIComponent(name)}`).catch(() => {});
+    if (wasRunning) await docker('POST', `/containers/${old.Id}/start`).catch(() => {});
+    throw new Error(`Recréation impossible, ancien conteneur remis en place : ${e.message}`);
+  }
+  await docker('DELETE', `/containers/${old.Id}?v=0`).catch(e => log('suppression de l\'ancien conteneur', e.message));
+  if (state.imageUpdates[ref]) state.imageUpdates[ref] = { update: false, checkedAt: new Date().toISOString() };
+  job.state = 'done';
+}
+async function ctWorker() {
+  if (ctBusy) return;
+  ctBusy = true;
+  while (ctQueue.length) {
+    const name = ctQueue.shift();
+    const job = ctJobs.get(name);
+    try { log('mise à jour du conteneur', name); await recreate(name); log('conteneur à jour', name); }
+    catch (e) { job.state = 'error'; job.error = e.message; log('échec mise à jour', name, e.message); }
+    job.at = new Date().toISOString();
+  }
+  ctBusy = false;
+}
+function containerUpdate(id) {
+  if (!CFG.allowActions) throw new Error('Actions Docker désactivées sur cet agent (HD_ALLOW_DOCKER_ACTIONS=0)');
+  if (!/^[a-f0-9]{12,64}$/.test(id)) throw new Error('Conteneur invalide');
+  return docker('GET', `/containers/${id}/json`).then(c => {
+    const name = c.Name.replace(/^\//, '');
+    const cur = ctJobs.get(name);
+    if (cur && ['queued', 'pulling', 'recreating'].includes(cur.state)) throw new Error('Mise à jour déjà en cours');
+    ctJobs.set(name, { state: 'queued', at: new Date().toISOString() });
+    ctQueue.push(name);
+    ctWorker();
+    return { ok: true, queued: true };
+  });
 }
 
 // Détection des images obsolètes : digest local (RepoDigests) vs digest distant (registre)
@@ -542,8 +654,8 @@ if (CFG.mode === 'pull') {
       if (!verify(req, body)) return send(401, { error: 'Signature invalide (jeton ou horloge ?)' });
       try {
         if (req.method === 'GET' && req.url === '/v1/report') return send(200, await report());
-        const m = req.url.match(/^\/v1\/docker\/([a-f0-9]{12,64})\/(start|stop|restart)$/);
-        if (req.method === 'POST' && m) return send(200, await dockerAction(m[1], m[2]));
+        const m = req.url.match(/^\/v1\/docker\/([a-f0-9]{12,64})\/(start|stop|restart|update)$/);
+        if (req.method === 'POST' && m) return send(200, m[2] === 'update' ? await containerUpdate(m[1]) : await dockerAction(m[1], m[2]));
         if (req.method === 'POST' && req.url === '/v1/refresh') { scanSmart(); checkUpdates(); checkImages(); return send(200, { ok: true }); }
         const a = req.url.match(/^\/v1\/apt\/(upgrade|security|install)(?:\?pkgs=([^&]*))?$/);
         if (req.method === 'POST' && a) return send(200, aptStart(a[1], decodeURIComponent(a[2] || '').split(',').filter(Boolean)));
@@ -573,6 +685,7 @@ if (CFG.mode === 'push') {
         try {
           if (c.op === 'refresh') { scanSmart(); checkUpdates(); checkImages(); results.push({ id: c.id, ok: true }); }
           else if (c.op === 'apt') { aptStart(c.aptOp, c.packages || []); results.push({ id: c.id, ok: true }); }
+          else if (c.op === 'update') { await containerUpdate(c.containerId); results.push({ id: c.id, ok: true }); }
           else { await dockerAction(c.containerId, c.op); results.push({ id: c.id, ok: true }); }
         } catch (e) { results.push({ id: c.id, ok: false, error: e.message }); }
       }
@@ -584,5 +697,5 @@ if (CFG.mode === 'push') {
 }
 
 // exports pour les tests
-if (process.env.HD_TEST) module.exports = { dpkgCompare, parseRef, report, scanSmart, checkUpdates, aptUpdates, checkImages, state, sign };
+if (process.env.HD_TEST) module.exports = { dpkgCompare, parseRef, report, scanSmart, checkUpdates, aptUpdates, checkImages, state, sign, containerUpdate, ctJobs };
 process.on('SIGTERM', () => process.exit(0));
