@@ -238,15 +238,17 @@ function renderApp() {
   <div class="app ${S.edit ? 'editing' : ''}">
     <header class="top">
       <div class="greet">
-        <div class="date" id="clock">${esc(dateLine())}</div>
         <h1>${st.greeting !== false ? `${greeting()}${S.session.user ? ` <span class="accent">${esc(S.session.user)}</span>` : ''} !` : esc(st.title)}</h1>
       </div>
-      <div class="top-actions">
-        <button class="btn mode-btn" data-act="mode" title="Mode : ${esc(MODE_LABEL[currentMode()])}${deviceMode() ? ' (cet appareil)' : ''} — cliquer pour changer">${MODE_ICON[currentMode()]}</button>
-        ${canEdit() ? `
-          <button class="btn ${S.edit ? 'on' : ''}" data-act="toggle-edit">${S.edit ? '✓ Terminer' : '✎ Modifier'}</button>
-          <button class="btn" data-act="admin">⚙ Administration</button>`
-        : '<button class="btn" data-act="login">Connexion</button>'}
+      <div class="top-right">
+        <div class="date" id="clock">${esc(dateLine())}</div>
+        <div class="top-actions">
+          <button class="btn icon-btn mode-btn" data-act="mode" title="Mode : ${esc(MODE_LABEL[currentMode()])}${deviceMode() ? ' (cet appareil)' : ''} — cliquer pour changer" aria-label="Mode clair / sombre">${MODE_ICON[currentMode()]}</button>
+          ${canEdit() ? `
+            <button class="btn icon-btn ${S.edit ? 'on' : ''}" data-act="toggle-edit" title="${S.edit ? 'Terminer la modification' : 'Modifier la page'}" aria-label="${S.edit ? 'Terminer' : 'Modifier'}">${S.edit ? '✓' : '✎'}</button>
+            <button class="btn icon-btn" data-act="admin" title="Administration" aria-label="Administration">⚙</button>`
+          : '<button class="btn" data-act="login">Connexion</button>'}
+        </div>
       </div>
     </header>
     <nav class="tabs" id="tabs">
@@ -875,7 +877,7 @@ function rdState(w) {
     try { saved = JSON.parse(localStorageGet(RD_KEY(w.id)) || '{}'); } catch { /* ignoré */ }
     S.rd[w.id] = {
       stream: saved.stream || 'all', filter: saved.filter || (w.config?.unreadOnly === false ? 'all' : 'unread'),
-      collapsed: new Set(saved.collapsed || []), items: [], ids: new Set(), cont: null, loading: false,
+      collapsed: new Set(saved.collapsed || []), sideUnread: !!saved.sideUnread, items: [], ids: new Set(), cont: null, loading: false,
       sel: null, tree: null, q: '', side: false, intId: null, loadedAt: null, queue: new Map(), ready: false
     };
   }
@@ -883,7 +885,7 @@ function rdState(w) {
 }
 function rdSave(w) {
   const st = rdState(w);
-  localStorageSet(RD_KEY(w.id), JSON.stringify({ stream: st.stream, filter: st.filter, collapsed: [...st.collapsed] }));
+  localStorageSet(RD_KEY(w.id), JSON.stringify({ stream: st.stream, filter: st.filter, collapsed: [...st.collapsed], sideUnread: st.sideUnread }));
 }
 const rdText = html => { const d = document.createElement('div'); d.innerHTML = String(html || '').replace(/<(script|style)[\s\S]*?<\/\1>/gi, ''); return (d.textContent || '').replace(/\s+/g, ' ').trim(); };
 const rdImg = u => (u && (/^https?:\/\//i.test(u) || /^\/[^/]/.test(u)) ? u : '');
@@ -913,17 +915,21 @@ function rdSideHtml(st) {
   return `
     ${it('all', '<span class="rd-ico">≡</span>', 'Tous les articles', t?.unread)}
     ${it('starred', '<span class="rd-ico star">★</span>', 'Favoris', 0)}
-    <div class="rd-sep">Catégories</div>
-    ${(t?.categories || []).map(c => {
+    <div class="rd-sep rd-sep-f"><span>Catégories</span>
+      <span class="seg seg-xs" title="Abonnements affichés dans cette colonne">
+        <button type="button" class="btn sm ${st.sideUnread ? 'on' : ''}" data-rsf="unread">Non lus</button>
+        <button type="button" class="btn sm ${st.sideUnread ? '' : 'on'}" data-rsf="all">Tous</button>
+      </span></div>
+    ${(t?.categories || []).filter(c => !st.sideUnread || c.unread || c.id === st.stream || c.feeds.some(f => f.id === st.stream)).map(c => {
       const closed = st.collapsed.has(c.id);
       return `<div class="rd-cat ${closed ? 'closed' : ''}">
         <div class="rd-crow">
           <button type="button" class="rd-tw" data-rtw="${esc(c.id)}" title="${closed ? 'Déplier' : 'Replier'}">▾</button>
           ${it(c.id, '', c.name, c.unread, 'cat')}
         </div>
-        <div class="rd-feeds">${c.feeds.map(f => it(f.id, rdFavicon(f, f.name), f.name, f.unread, `feed ${f.unread ? '' : 'zero'}`)).join('')}</div>
+        <div class="rd-feeds">${c.feeds.filter(f => !st.sideUnread || f.unread || f.id === st.stream).map(f => it(f.id, rdFavicon(f, f.name), f.name, f.unread, `feed ${f.unread ? '' : 'zero'}`)).join('')}</div>
       </div>`;
-    }).join('') || '<div class="muted small" style="padding:8px 12px">Aucun abonnement</div>'}`;
+    }).join('') || `<div class="muted small" style="padding:8px 12px">${st.sideUnread && t?.categories?.length ? 'Aucun abonnement avec des articles non lus 🎉' : 'Aucun abonnement'}</div>`}`;
 }
 
 function rdItemHtml(st, i, k, showImg) {
@@ -960,7 +966,10 @@ function rdListHtml(w, st) {
     ${st.q && st.cont ? '<button type="button" class="btn sm" data-rb="more">Chercher dans les articles plus anciens</button>' : ''}</div>`;
   return vis.map(([i, k]) => rdItemHtml(st, i, k, showImg)).join('')
     + (st.cont ? (st.q ? `<div class="rd-more"><button type="button" class="btn sm" data-rb="more">Chercher aussi dans les ${st.items.length > 1 ? 'articles plus anciens' : 'articles suivants'}</button></div>` : '<div class="rd-more muted small">Chargement des articles suivants…</div>')
-      : '<div class="rd-end muted small">— Fin des articles —</div>');
+      : `<div class="rd-end muted small">— Fin des articles —</div>${(() => {
+        const n = vis.filter(([i]) => !i.read).length;
+        return canEdit() && n ? `<div class="rd-end-act"><button type="button" class="btn sm" data-rb="readvis">✓ Marquer comme lu${n > 1 ? `s les ${n} articles` : ' l\'article'} ci-dessus</button></div>` : '';
+      })()}`);
 }
 function rdViewHtml(st) {
   const it = st.items.find(i => i.id === st.sel);
@@ -1799,6 +1808,8 @@ const RENDER = {
           rdPaint(w, el, ['side']);
           return;
         }
+        const sf = t.closest('[data-rsf]');
+        if (sf) { st.sideUnread = sf.dataset.rsf === 'unread'; rdSave(w); rdPaint(w, el, ['side']); return; }
         const f = t.closest('[data-rf]');
         if (f) { if (f.dataset.rf !== st.filter) rdSwitch(w, el, { filter: f.dataset.rf }); return; }
         const row = t.closest('.rd-item');
@@ -1816,6 +1827,15 @@ const RENDER = {
           case 'next': rdStep(w, el, 1); break;
           case 'refresh': await rdFlush(w); loadWidget(w); break;
           case 'side': st.side = !st.side; $('.rd', el).classList.toggle('side-open', st.side); break;
+          case 'readvis': {
+            // uniquement les articles affichés dans la liste (recherche comprise)
+            const items = rdVisible(st).map(([i]) => i).filter(i => !i.read);
+            rdMark(w, el, items, true);
+            await rdFlush(w);
+            rdPaint(w, el, ['list']);
+            toast(`${items.length} article(s) marqué(s) comme lu${items.length > 1 ? 's' : ''} ✓`);
+            break;
+          }
           case 'readall': {
             const name = rdStreamName(st);
             if (!confirm(`Marquer comme lus tous les articles de « ${name} » ?`)) return;
