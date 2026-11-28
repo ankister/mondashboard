@@ -687,3 +687,8 @@ nav.tabs { margin-bottom: 16px; }
 .rd-sep-f { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .seg-xs .btn { padding: 1px 7px; font-size: 11px; letter-spacing: 0; text-transform: none; }
 .rd-end-act { display: flex; justify-content: center; padding: 4px 12px 18px; }
+/* haut du « Bonjour » aligné sur le haut de la date */
+header.top { align-items: flex-start; }
+.greet h1 { line-height: 1; margin-top: -1.5px; }
+@media (max-width: 700px) { .greet h1 { margin-top: -2px; } }
+.top-right .date { line-height: 1; }
