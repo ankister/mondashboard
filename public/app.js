@@ -110,7 +110,12 @@ const S = {
   session: null, dash: null, meta: null, integrations: [],
   edit: false, pageId: null, timers: [], cache: {}, filters: {}
 };
-const page = () => S.dash.pages.find(p => p.id === S.pageId) || S.dash.pages[0];
+// onglets masqués sur téléphone : invisibles hors mode Modifier (on bascule alors sur le premier onglet visible)
+const tabShown = p => S.edit || !(p.hideMobile && window.matchMedia('(max-width: 759px)').matches);
+const page = () => {
+  const vis = S.dash.pages.filter(tabShown);
+  return vis.find(p => p.id === S.pageId) || vis[0] || S.dash.pages.find(p => p.id === S.pageId) || S.dash.pages[0];
+};
 const canEdit = () => !!S.dash?.canEdit;
 
 async function ensureAdminData() {
@@ -120,7 +125,7 @@ async function ensureAdminData() {
 
 // ================= Démarrage / connexion =================
 // ---------- Mode clair / sombre ----------
-// réglage par défaut (Administration → Apparence), remplaçable sur chaque appareil avec le bouton de l'en-tête
+// réglage par défaut (Paramètres → Apparence), remplaçable sur chaque appareil avec le bouton de l'en-tête
 const MODE_ICON = { auto: '🌓', clair: '☀️', sombre: '🌙' };
 const MODE_LABEL = { auto: 'Automatique (suit l\'appareil)', clair: 'Clair', sombre: 'Sombre' };
 const LIGHT_MQ = window.matchMedia('(prefers-color-scheme: light)');
@@ -247,15 +252,15 @@ function renderApp() {
           <button class="btn icon-btn mode-btn" data-act="mode" title="Mode : ${esc(MODE_LABEL[currentMode()])}${deviceMode() ? ' (cet appareil)' : ''} — cliquer pour changer" aria-label="Mode clair / sombre">${MODE_ICON[currentMode()]}</button>
           ${canEdit() ? `
             <button class="btn icon-btn ${S.edit ? 'on' : ''}" data-act="toggle-edit" title="${S.edit ? 'Terminer la modification' : 'Modifier la page'}" aria-label="${S.edit ? 'Terminer' : 'Modifier'}">${S.edit ? '✓' : '✎'}</button>
-            <button class="btn icon-btn" data-act="admin" title="Administration" aria-label="Administration">⚙</button>`
+            <button class="btn icon-btn" data-act="admin" title="Paramètres" aria-label="Paramètres">⚙</button>`
           : '<button class="btn" data-act="login">Connexion</button>'}
         </div>
       </div>
     </header>
     <nav class="tabs" id="tabs">
-      ${S.dash.pages.map(pg => `
+      ${S.dash.pages.filter(tabShown).map(pg => `
         <button class="tab ${pg.id === p?.id ? 'active' : ''}" data-tab="${pg.id}" ${S.edit ? 'draggable="true"' : ''}>
-          ${pg.icon ? symHtml(pg.icon) : ''}${esc(pg.name)}
+          ${pg.icon ? symHtml(pg.icon) : ''}${esc(pg.name)}${S.edit && pg.hideMobile ? '<span class="tab-mob" title="Masqué sur téléphone">📵</span>' : ''}
           ${S.edit && pg.id === p?.id ? '<span class="tab-edit" data-act="edit-tab" title="Modifier l\'onglet">✎</span>' : ''}
         </button>`).join('')}
       ${S.edit ? '<button class="tab tab-add" data-act="add-tab">＋ Onglet</button>' : ''}
@@ -600,7 +605,7 @@ function aptBar(d, w) {
   const a = d.apt;
   if (!canEdit() || !a.total) return '';
   if (a.old) return '<div class="muted small upd-all-bar">Mets à jour le conteneur de l\'agent pour lancer apt depuis ici.</div>';
-  if (!a.can) return '<div class="muted small upd-all-bar">Pour installer depuis ici : Administration → Intégrations → cet agent → cocher « Autoriser les mises à jour du système (apt) ».</div>';
+  if (!a.can) return '<div class="muted small upd-all-bar">Pour installer depuis ici : Paramètres → Intégrations → cet agent → cocher « Autoriser les mises à jour du système (apt) ».</div>';
   if (a.job && !a.job.finishedAt) return '';
   if (S.aptAsk?.[w.id]) {
     const sec = S.aptAsk[w.id] === 'security';
@@ -1641,7 +1646,7 @@ const RENDER = {
              <button class="iconbtn" data-op="stop" data-cid="${c.id}" data-int="${c.integrationId}" data-name="${esc(c.name)}" title="Arrêter">■</button>`
           : `<button class="iconbtn" data-op="start" data-cid="${c.id}" data-int="${c.integrationId}" data-name="${esc(c.name)}" title="Démarrer">▶</button>`}</span>` : '');
       const noActs = canEdit() && all.length && !all.some(c => c.canAct)
-        ? '<div class="help" style="margin-bottom:8px">Actions indisponibles sur ces sources. Pour démarrer / arrêter / redémarrer, installe l\'agent Mon dashboard sur la machine (⚙ Administration → Intégrations → Agent Mon dashboard) avec « Autoriser start / stop / restart », puis sélectionne-le dans ce widget.</div>' : '';
+        ? '<div class="help" style="margin-bottom:8px">Actions indisponibles sur ces sources. Pour démarrer / arrêter / redémarrer, installe l\'agent Mon dashboard sur la machine (⚙ Paramètres → Intégrations → Agent Mon dashboard) avec « Autoriser start / stop / restart », puis sélectionne-le dans ce widget.</div>' : '';
       return `${noActs}
         <div class="dk-sum muted small"><span>${all.length} conteneur(s) · <span class="st-running">${running} actif(s)</span> · <span class="st-exited">${all.length - running} arrêté(s)</span>${outdated ? ` · <span style="color:var(--warn)">⬆ ${outdated} image(s) à mettre à jour</span>` : ''}</span>
           <span class="dk-act">${checkInfo}
@@ -2304,13 +2309,14 @@ function editTab(pg) {
       <label>Nom<input name="name" value="${esc(pg?.name || '')}" required maxlength="40"></label>
       <label>Icône<span class="icon-field"><input type="hidden" name="icon" value="${esc(pg?.icon || '')}">
         <button type="button" class="btn icon-pick" data-iconpick>${pg?.icon ? symHtml(pg.icon) : '<span class="muted">Aucune</span>'}<span class="small muted">Choisir…</span></button></span></label></div>
+      <label class="chk"><input type="checkbox" name="hideMobile" ${pg?.hideMobile ? 'checked' : ''}> Masquer cet onglet sur téléphone (écran de moins de 760 px)</label>
       ${pg ? '' : `<label>Contenu de départ<select name="tpl">
         <option value="">Onglet vide</option>
         <option value="reader">Lecteur RSS (FreshRSS) en pleine page</option>
       </select></label>
       <div class="help" data-tplhelp hidden>${(() => {
         const n = S.integrations.filter(i => S.meta.integrations[i.type]?.provides.includes('reader')).length;
-        return n ? 'Le lecteur sera branché sur ta première intégration FreshRSS (modifiable avec ⚙).' : 'Aucune intégration FreshRSS pour l\'instant : ajoute-la dans ⚙ Administration → Intégrations, puis choisis-la dans le ⚙ du lecteur.';
+        return n ? 'Le lecteur sera branché sur ta première intégration FreshRSS (modifiable avec ⚙).' : 'Aucune intégration FreshRSS pour l\'instant : ajoute-la dans ⚙ Paramètres → Intégrations, puis choisis-la dans le ⚙ du lecteur.';
       })()}</div>`}</form>`,
     footer: `${pg ? '<button class="btn danger" data-del style="margin-right:auto">Supprimer l\'onglet</button>' : ''}
       <button class="btn" data-close2>Annuler</button><button class="btn primary" data-ok>Enregistrer</button>`
@@ -2326,9 +2332,9 @@ function editTab(pg) {
   $('[data-ok]', m.el).onclick = () => {
     const f = Object.fromEntries(new FormData($('#tabForm', m.el)));
     if (!f.name.trim()) return;
-    if (pg) Object.assign(pg, { name: f.name.trim(), icon: f.icon.trim() });
+    if (pg) Object.assign(pg, { name: f.name.trim(), icon: f.icon.trim(), hideMobile: f.hideMobile === 'on' });
     else {
-      const np = { id: uid(), name: f.name.trim(), icon: f.icon.trim(), widgets: [] };
+      const np = { id: uid(), name: f.name.trim(), icon: f.icon.trim(), hideMobile: f.hideMobile === 'on', widgets: [] };
       if (f.tpl === 'reader') {
         const d = S.meta.widgets.reader;
         const src = S.integrations.find(i => i.type === 'freshrss') || S.integrations.find(i => S.meta.integrations[i.type]?.provides.includes('reader'));
@@ -2470,7 +2476,7 @@ function widgetForm(orig) {
     ${compatible.length ? `<div class="int-pick">${compatible.map(i => `
       <label class="chk"><input type="${d.integrations === 'one' ? 'radio' : 'checkbox'}" name="int" value="${i.id}" ${w.integrations.includes(i.id) ? 'checked' : ''}>
       ${esc(i.name)} <span class="muted small">(${esc(S.meta.integrations[i.type].label)})</span></label>`).join('')}</div>`
-      : '<div class="help">Aucune intégration compatible. Ajoute-en une dans ⚙ Administration → Intégrations.</div>'}</div>`;
+      : '<div class="help">Aucune intégration compatible. Ajoute-en une dans ⚙ Paramètres → Intégrations.</div>'}</div>`;
   const m = modal({
     title: `${orig.id ? 'Configurer' : 'Nouveau'} : ${d.label}`, wide: w.type === 'bookmarks',
     body: `<form class="form" id="wForm">
@@ -2623,10 +2629,10 @@ function widgetForm(orig) {
   };
 }
 
-// ================= Administration =================
+// ================= Paramètres (intégrations, apparence, général) =================
 async function openAdmin(tab = 'int') {
   await ensureAdminData();
-  const m = modal({ title: 'Administration', wide: true, body: '<div class="pills"><button class="btn" data-pill="int">🔌 Intégrations</button><button class="btn" data-pill="theme">🎨 Apparence</button><button class="btn" data-pill="set">⚙ Paramètres</button></div><div id="admBody"></div>' });
+  const m = modal({ title: 'Paramètres', wide: true, body: `<div class="pills"><button class="btn" data-pill="int">${symHtml('lucide:plug')} Intégrations</button><button class="btn" data-pill="theme">${symHtml('lucide:palette')} Apparence</button><button class="btn" data-pill="set">${symHtml('lucide:sliders-horizontal')} Général</button></div><div id="admBody"></div>` });
   const show = t => {
     $$('[data-pill]', m.el).forEach(b => b.classList.toggle('on', b.dataset.pill === t));
     ({ int: adminIntegrations, theme: adminTheme, set: adminSettings })[t]($('#admBody', m.el), m);
@@ -2700,20 +2706,44 @@ function adminTheme(box) {
   };
 }
 
+// ---------- intégrations : catégories et logos ----------
+// logos des services : Simple Icons (CC0, voir public/icons/brands/LICENSE) ; sinon une icône Lucide
+const INT_CATS = [['mach', 'Machines & conteneurs'], ['media', 'Médias & téléchargements'], ['home', 'Maison connectée'], ['read', 'Lecture & agenda'], ['web', 'Sites web & statistiques'], ['other', 'Autres']];
+const INT_LOOK = {
+  agent: ['mach', 'lucide:server', ''], glances: ['mach', 'lucide:activity', '#3f9d58'], docker: ['mach', 'docker', '#2496ed'],
+  plex: ['media', 'plex', '#ebaf00'], jellyfin: ['media', 'jellyfin', '#00a4dc'], qbittorrent: ['media', 'qbittorrent', '#2f67ba'],
+  homeassistant: ['home', 'homeassistant', '#18bcf2'],
+  freshrss: ['read', 'freshrss', '#0062be'], calendar: ['read', 'lucide:calendar-days', '#e0743a'],
+  umami: ['web', 'umami', '#101010'], demo: ['other', 'lucide:flask-conical', '#6b7280']
+};
+function intIcon(type) {
+  const [, ic, col] = INT_LOOK[type] || ['other', 'lucide:plug', '#6b7280'];
+  const url = ic.startsWith('lucide:') ? `/icons/lucide/${ic.slice(7)}.svg` : `/icons/brands/${ic}.svg`;
+  return `<span class="int-ic" style="${col ? `--c:${col}` : ''}"><span class="lic" style="--i:url('${url}')"></span></span>`;
+}
+// regroupe des éléments par catégorie d'intégration (titres de section)
+function intGroups(items, typeOf, render) {
+  if (!items.length) return '';
+  return INT_CATS.map(([c, label]) => {
+    const list = items.filter(x => (INT_LOOK[typeOf(x)]?.[0] || 'other') === c);
+    return list.length ? `<div class="int-cat">${esc(label)}</div>${render(list)}` : '';
+  }).join('');
+}
+
 function adminIntegrations(box, m) {
   const types = S.meta.integrations;
   box.innerHTML = `
     <div class="toolbar"><span class="muted small" style="flex:1">Les intégrations sont les connexions à tes serveurs. Les mots de passe et jetons sont chiffrés et ne quittent jamais le serveur.</span>
     <button class="btn primary" data-new>＋ Ajouter</button></div>
-    <div class="int-list">${S.integrations.map(i => `
-      <div class="int-row"><div class="n"><b>${esc(i.name)}</b><span class="muted small">${esc(types[i.type]?.label || i.type)}${i.type === 'agent' ? ` · ${esc(i.config.mode)}` : ''}${i.config.url ? ' · ' + esc(i.config.url) : ''}${i.type === 'agent' && i.config.mode === 'push' ? ` · ${i.lastSeen ? `vu ${relTime(new Date(i.lastSeen).toISOString())}` : 'jamais vu'}` : ''}</span></div>
+    ${intGroups(S.integrations, i => i.type, list => `<div class="int-list">${list.map(i => `
+      <div class="int-row">${intIcon(i.type)}<div class="n"><b>${esc(i.name)}</b><span class="muted small">${esc(types[i.type]?.label || i.type)}${i.type === 'agent' ? ` · ${esc(i.config.mode)}` : ''}${i.config.url ? ' · ' + esc(i.config.url) : ''}${i.type === 'agent' && i.config.mode === 'push' ? ` · ${i.lastSeen ? `vu ${relTime(new Date(i.lastSeen).toISOString())}` : 'jamais vu'}` : ''}</span></div>
       ${i.type === 'agent' ? `<button class="btn sm" data-install="${i.id}">Installer l'agent</button>` : ''}
-      <button class="btn sm" data-edit="${i.id}">Modifier</button><button class="btn sm danger" data-del="${i.id}">Supprimer</button></div>`).join('')
-      || '<div class="empty">Aucune intégration pour l\'instant.</div>'}</div>`;
+      <button class="btn sm" data-edit="${i.id}">Modifier</button><button class="btn sm danger" data-del="${i.id}">Supprimer</button></div>`).join('')}</div>`)
+      || '<div class="empty">Aucune intégration pour l\'instant.</div>'}`;
   box.onclick = async e => {
     if (e.target.closest('[data-new]')) {
-      box.innerHTML = `<div class="type-grid">${Object.entries(types).map(([k, t]) => `
-        <button class="type-card" data-t="${k}"><b>${esc(t.label)}</b><div class="muted small">Pour : ${t.provides.map(p => esc(S.meta.widgets[p]?.label || p)).join(', ')}</div></button>`).join('')}</div>
+      box.innerHTML = intGroups(Object.keys(types), k => k, keys => `<div class="type-grid">${keys.map(k => { const t = types[k]; return `
+        <button class="type-card" data-t="${k}">${intIcon(k)}<div><b>${esc(t.label)}</b><div class="muted small">Pour : ${t.provides.map(p => esc((S.meta.widgets[p] || Object.values(S.meta.widgets).find(w => w.kind === p))?.label || p)).join(', ')}</div></div></button>`; }).join('')}</div>`) + `
         <div style="margin-top:12px"><button class="btn" data-back>← Retour</button></div>`;
       return;
     }
@@ -2849,8 +2879,47 @@ function agentSetup(box, m, it) {
 function localStorageGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch { /* stockage indisponible */ } }
 
+// favicon : met à jour l'icône de l'onglet sans recharger la page
+function setFavicon(v) {
+  const old = document.getElementById('favLink');
+  const l = document.createElement('link');
+  l.rel = 'icon'; l.id = 'favLink'; l.href = `/favicon?v=${v || Date.now()}`;
+  old ? old.replaceWith(l) : document.head.appendChild(l);
+}
+const fmtKo = n => n < 1024 ? `${n} o` : `${(n / 1024).toFixed(n < 10240 ? 1 : 0).replace('.', ',')} Ko`;
+// lit l'image choisie, donne sa taille et la réduit à 256 × 256 px (PNG, centrée) si elle est plus grande ou pas carrée
+function prepareFavicon(file) {
+  return new Promise((resolve, reject) => {
+    if (file.size > 8 * 1024 * 1024) return reject(new Error('Image trop lourde (8 Mo maximum avant réduction).'));
+    const rd = new FileReader();
+    rd.onerror = () => reject(new Error('Lecture du fichier impossible.'));
+    rd.onload = () => {
+      const data = rd.result;
+      const isIco = /icon$/.test(file.type) || /\.ico$/i.test(file.name);
+      if (isIco) return file.size > 1024 * 1024 ? reject(new Error('Fichier ICO trop lourd (1 Mo maximum).')) : resolve({ data: data.replace(/^data:[^;]*;/, 'data:image/x-icon;'), w: 0, h: 0 });
+      const img = new Image();
+      img.onerror = () => reject(new Error('Ce fichier n\'est pas une image lisible.'));
+      img.onload = () => {
+        const w = img.naturalWidth, h = img.naturalHeight;
+        if (file.type === 'image/svg+xml') return file.size > 1024 * 1024 ? reject(new Error('SVG trop lourd (1 Mo maximum).')) : resolve({ data, w, h });
+        if (w <= 256 && w === h && file.size <= 1024 * 1024) return resolve({ data, w, h });
+        const out = Math.min(256, Math.max(w, h));
+        const c = document.createElement('canvas'); c.width = c.height = out;
+        const k = out / Math.max(w, h);
+        c.getContext('2d').drawImage(img, (out - w * k) / 2, (out - h * k) / 2, w * k, h * k);
+        const png = c.toDataURL('image/png');
+        resolve({ data: png, w, h, out, bytes: Math.round((png.length - 22) * 3 / 4) });
+      };
+      img.src = data;
+    };
+    rd.readAsDataURL(file);
+  });
+}
+
 function adminSettings(box) {
   const st = S.dash.settings;
+  const fav = { mode: 'icon', icon: '🏠', color: '#3b82f6', bg: false, ...(st.favicon || {}) };
+  let favImage; // undefined : inchangée · '' : à supprimer · data URL : nouvelle image
   box.innerHTML = `
     <form class="form" id="setForm">
       <label>Titre du site<input name="title" value="${esc(st.title)}"></label>
@@ -2861,6 +2930,25 @@ function adminSettings(box) {
           <option value="same" ${st.linkTarget === 'same' ? 'selected' : ''}>Dans le même onglet (à la place du dashboard)</option>
         </select></label>
       <div class="help">Ctrl+clic ou clic molette ouvre toujours un nouvel onglet.</div>
+      <div class="section-lbl" style="margin-top:6px">Icône de l'onglet du navigateur (favicon)</div>
+      <div class="fav-box">
+        <div class="fav-prev"><img data-favprev alt=""><img data-favprev class="sm" alt=""><span class="muted small">Aperçu</span></div>
+        <div class="fav-opts">
+          <div class="fav-seg"><label><input type="radio" name="favMode" value="icon" ${fav.mode !== 'image' ? 'checked' : ''}> Icône</label><label><input type="radio" name="favMode" value="image" ${fav.mode === 'image' ? 'checked' : ''}> Image</label></div>
+          <div data-favicon-icon>
+            <span class="icon-field"><input type="hidden" name="favIcon" value="${esc(fav.icon)}">
+              <button type="button" class="btn icon-pick" data-iconpick>${symHtml(fav.icon)}<span class="small muted">Choisir…</span></button></span>
+            <label class="inline">Couleur <input type="color" name="favColor" value="${esc(fav.color)}"></label>
+            <label class="chk"><input type="checkbox" name="favBg" ${fav.bg ? 'checked' : ''}> Sur un fond coloré</label>
+          </div>
+          <div data-favicon-image>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><label class="btn sm" style="cursor:pointer">Choisir une image…<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/x-icon,.ico" data-favfile hidden></label>
+              ${st.faviconType ? '<button type="button" class="btn sm" data-favdel>Supprimer l\'image</button>' : ''}</div>
+            <div class="help">Image carrée, idéalement <b>512 × 512 px</b> (32 × 32 px minimum). PNG, JPG, WebP, GIF, SVG ou ICO, 1 Mo maximum. Les grandes images sont réduites à 256 × 256 px.</div>
+            <div class="small" data-favinfo>${st.faviconType ? 'Image actuelle enregistrée.' : '<span class="muted">Aucune image envoyée.</span>'}</div>
+          </div>
+        </div>
+      </div>
       <label class="chk"><input type="checkbox" name="publicView" ${st.publicView ? 'checked' : ''}> Consultation sans connexion (lecture seule ; les actions restent réservées à l'admin)</label>
       <div class="row2">
         <label>Session sans « Rester connecté » (heures)<input type="number" name="sessionHours" min="1" value="${st.sessionHours || 168}"></label>
@@ -2876,12 +2964,49 @@ function adminSettings(box) {
       <div class="help">Changer le mot de passe déconnecte tous tes autres appareils.</div>
       <div style="display:flex;justify-content:space-between"><button class="btn danger" type="button" data-logout>Se déconnecter</button><button class="btn">Changer le mot de passe</button></div>
     </form>`;
-  $('#setForm', box).onsubmit = async e => {
+  const sf = $('#setForm', box);
+  bindIconPick(sf);
+  const favRefresh = () => {
+    const mode = sf.favMode.value;
+    $('[data-favicon-icon]', sf).hidden = mode !== 'icon';
+    $('[data-favicon-image]', sf).hidden = mode !== 'image';
+    let src;
+    if (mode === 'image') src = favImage || (favImage === undefined && st.faviconType ? `/favicon?v=${st.favicon?.v || 0}` : '');
+    else src = `/favicon?preview=1&icon=${encodeURIComponent(sf.favIcon.value)}&color=${encodeURIComponent(sf.favColor.value)}&bg=${sf.favBg.checked ? 1 : 0}`;
+    $$('[data-favprev]', sf).forEach(i => { i.hidden = !src; if (src) i.src = src; });
+  };
+  sf.addEventListener('input', e => { if (/^fav/.test(e.target.name || '')) favRefresh(); });
+  sf.addEventListener('click', e => {
+    if (e.target.closest('[data-iconpick]')) { // la fenêtre de choix change la valeur : rafraîchir l'aperçu à sa fermeture
+      const iv = sf.favIcon.value; const t = setInterval(() => { if (!document.querySelector('.ip')) { clearInterval(t); if (sf.favIcon.value !== iv) favRefresh(); } }, 200); }
+    if (e.target.closest('[data-favdel]')) { favImage = ''; $('[data-favinfo]', sf).innerHTML = '<span class="muted">L\'image sera supprimée à l\'enregistrement.</span>'; favRefresh(); }
+  });
+  $('[data-favfile]', sf).onchange = async e => {
+    const file = e.target.files[0]; e.target.value = '';
+    if (!file) return;
+    const info = $('[data-favinfo]', sf);
+    try {
+      const r = await prepareFavicon(file);
+      favImage = r.data;
+      const warn = [];
+      if (r.w && r.w !== r.h) warn.push('elle n\'est pas carrée : elle sera centrée');
+      if (r.w && Math.min(r.w, r.h) < 32) warn.push('elle est petite, elle risque d\'être floue');
+      info.innerHTML = `<b>${esc(file.name)}</b> : ${r.w ? `${r.w} × ${r.h} px` : 'taille vectorielle'} · ${fmtKo(file.size)}${r.out ? ` → enregistrée en ${r.out} × ${r.out} px PNG (${fmtKo(r.bytes)})` : ''}${warn.length ? `<div class="w-warn" style="margin-top:6px">Attention : ${warn.join(', ')}.</div>` : ''}`;
+      favRefresh();
+    } catch (err) { info.innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+  };
+  favRefresh();
+  sf.onsubmit = async e => {
     e.preventDefault();
     const f = e.target;
     try {
-      const r = await api('/settings', { method: 'PUT', body: { title: f.title.value, greeting: f.greeting.checked, publicView: f.publicView.checked, sessionHours: f.sessionHours.value, rememberDays: f.rememberDays.value, linkTarget: f.linkTarget.value } });
+      if (f.favMode.value === 'image' && !favImage && !st.faviconType) throw new Error('Choisis une image pour le favicon, ou repasse sur « Icône ».');
+      const body = { title: f.title.value, greeting: f.greeting.checked, publicView: f.publicView.checked, sessionHours: f.sessionHours.value, rememberDays: f.rememberDays.value, linkTarget: f.linkTarget.value,
+        favicon: { mode: f.favMode.value === 'image' && favImage !== '' ? 'image' : 'icon', icon: f.favIcon.value || '🏠', color: f.favColor.value, bg: f.favBg.checked } };
+      if (favImage !== undefined) body.faviconImage = favImage;
+      const r = await api('/settings', { method: 'PUT', body });
       S.dash.settings = r.settings; S.session.title = r.settings.title; document.title = r.settings.title;
+      setFavicon(r.settings.favicon?.v);
       toast('Paramètres enregistrés ✓');
       renderApp();
     } catch (err) { toast(err.message, true); }

@@ -49,8 +49,8 @@ DEMO=1 npm start
 | Hauteur d'un widget | Mode Modifier : sélecteur (Auto, 150 à 800 px) ou tirer la barre en bas du widget ; valeur libre dans ⚙. Le contenu défile si la hauteur est fixée. |
 | Démarrer / arrêter / redémarrer un conteneur | Widget Docker, boutons ▶ ■ ↻ (admin connecté, source « Agent Mon dashboard » avec actions autorisées) |
 | Configurer un widget | ⚙ (sources, options, favoris…) |
-| Connexions aux serveurs | **⚙ Administration → Intégrations** (avec bouton « Tester la connexion ») |
-| Consultation sans connexion | Administration → Paramètres (lecture seule ; les actions restent réservées à l'admin) |
+| Connexions aux serveurs | **⚙ Paramètres → Intégrations** (avec bouton « Tester la connexion ») |
+| Consultation sans connexion | ⚙ Paramètres → Général (lecture seule ; les actions restent réservées à l'admin) |
 
 **Icônes des favoris :** indique un nom du dépôt [dashboard-icons](https://github.com/homarr-labs/dashboard-icons) (`plex`, `jellyfin`, `home-assistant`…), une URL d'image ou un emoji. Si l'icône est introuvable, l'initiale s'affiche à la place. Le bouton ● d'un lien permet de tester une autre URL que celle du lien (par exemple l'IP interne d'un service publié via NPM), ou de désactiver le test.
 
@@ -69,7 +69,7 @@ Chaque machine Linux (Debian, Unraid…) reçoit un petit conteneur **homedash-a
 
 ### Installation (tout se fait dans l'interface)
 
-1. ⚙ Administration → Intégrations → ＋ → **Agent Mon dashboard**.
+1. ⚙ Paramètres → Intégrations → ＋ → **Agent Mon dashboard**.
 2. Choisis le mode :
    - **pull** (réseau local) : Mon dashboard interroge l'agent. Indique l'URL `http://IP-de-la-machine:9123`.
    - **push** (machine distante, hors de ton réseau local) : l'agent envoie ses données à Mon dashboard toutes les 10 s. Rien à ouvrir chez la machine, mais elle doit joindre Mon dashboard (en HTTPS via NPM).
@@ -110,7 +110,7 @@ L'intégration Glances reste disponible si tu as déjà Glances quelque part, ma
 | **Home Assistant** | Profil → Sécurité → Jeton d'accès longue durée ; ajoute l'intégration « System Monitor » pour CPU et RAM |
 | **Météo** | Open-Meteo, sans clé. Recherche la ville dans la configuration du widget. |
 
-Une fois les vraies intégrations en place, supprime les intégrations « Démo » dans Administration.
+Une fois les vraies intégrations en place, supprime les intégrations « Démo » dans ⚙ Paramètres → Intégrations.
 
 ---
 
@@ -160,4 +160,5 @@ Crée `lib/integrations/monservice.js` avec `{ label, help, provides, fields, te
 ## Crédits
 
 - Icônes d'onglets et de barres de titre : [Lucide](https://lucide.dev) (licence ISC, voir `public/icons/lucide/LICENSE`).
+- Logos des services dans les intégrations : [Simple Icons](https://simpleicons.org) (CC0 ; logo Umami sous licence MIT), voir `public/icons/brands/LICENSE`. Ce sont des marques de leurs propriétaires, utilisées seulement pour identifier le service.
 - Grille des widgets : [gridstack.js](https://gridstackjs.com) (licence MIT).

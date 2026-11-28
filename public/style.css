@@ -710,3 +710,27 @@ header.top { align-items: flex-start; }
 .ip-i:hover { border-color: var(--accent); color: var(--accent); }
 .ip-i.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .ip-foot a { color: var(--accent); }
+
+.tab-mob { font-size: 11px; margin-left: 4px; opacity: .8; }
+
+/* favicon (paramètres) */
+.fav-box { display: flex; gap: 16px; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg2); }
+.fav-prev { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 76px; }
+.fav-prev img { width: 64px; height: 64px; object-fit: contain; border-radius: 8px; background: repeating-conic-gradient(#8882 0 25%, transparent 0 50%) 0 0 / 12px 12px; }
+.fav-prev img.sm { width: 16px; height: 16px; border-radius: 2px; }
+.fav-opts { flex: 1; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.fav-opts [data-favicon-icon] { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.fav-opts [hidden] { display: none !important; }
+.fav-opts label.inline { display: flex; align-items: center; gap: 8px; margin: 0; }
+.fav-opts input[type=color] { width: 40px; height: 30px; padding: 2px; border-radius: 6px; }
+.fav-seg { display: inline-flex; gap: 14px; }
+.fav-seg label { display: flex; align-items: center; gap: 6px; margin: 0; cursor: pointer; }
+
+/* intégrations : catégories et logos */
+.int-cat { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 16px 2px 8px; }
+.int-cat:first-of-type { margin-top: 4px; }
+.int-ic { flex: none; display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; background: var(--c, var(--accent)); color: #fff; }
+.int-ic .lic { width: 20px; height: 20px; }
+.type-card { display: flex; gap: 12px; align-items: flex-start; }
+.type-card .int-ic { width: 34px; height: 34px; }
+.pills .btn .lic { width: 16px; height: 16px; margin-right: 2px; }

@@ -49,6 +49,42 @@ app.get('/theme.css', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.type('css').send(themeCss(load().settings.theme));
 });
+// ---------- Favicon : icône (Lucide ou emoji) sur fond coloré facultatif, ou image envoyée ----------
+const FAV_FILE = path.join(process.env.DATA_DIR || path.resolve('data'), 'favicon.img');
+const FAV_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/svg+xml'];
+const HEX = /^#[0-9a-f]{6}$/i;
+function cleanFavicon(f = {}) {
+  const icon = typeof f.icon === 'string' && (/^lucide:[a-z0-9-]{1,60}$/.test(f.icon) || (f.icon.length <= 8 && !/[<>&"']/.test(f.icon))) ? f.icon : '🏠';
+  return { mode: f.mode === 'image' ? 'image' : 'icon', icon: icon || '🏠', color: HEX.test(f.color) ? f.color : '#3b82f6', bg: f.bg === true || f.bg === '1' };
+}
+function parseFavImage(d) {
+  const m = /^data:([a-z/+.-]+);base64,([A-Za-z0-9+/=]+)$/.exec(String(d));
+  if (!m || !FAV_TYPES.includes(m[1])) throw bad('Format d\'image non pris en charge (PNG, JPG, WebP, GIF, SVG ou ICO)');
+  const buf = Buffer.from(m[2], 'base64');
+  if (buf.length > 1024 * 1024) throw bad('Image trop lourde (1 Mo maximum)');
+  return { type: m[1], buf };
+}
+function faviconSvg(f) {
+  const bgRect = f.bg ? `<rect width="24" height="24" rx="5" fill="${f.color}"/>` : '';
+  const lm = /^lucide:([a-z0-9-]+)$/.exec(f.icon);
+  if (lm) {
+    let inner = '';
+    try { inner = fs.readFileSync(path.resolve('public/icons/lucide', lm[1] + '.svg'), 'utf8').replace(/^[\s\S]*?<svg[^>]*>|<\/svg>\s*$/g, ''); } catch { /* icône inconnue */ }
+    const t = f.bg ? 'translate(4 4) scale(.6667)' : '';
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${bgRect}<g transform="${t}" fill="none" stroke="${f.bg ? '#ffffff' : f.color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</g></svg>`;
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${bgRect}<text x="12" y="${f.bg ? 17.2 : 19.5}" font-size="${f.bg ? 15 : 20}" text-anchor="middle">${f.icon}</text></svg>`;
+}
+// public : l'onglet de la page de connexion l'affiche aussi. ?preview=1 sert l'aperçu des réglages.
+app.get(/^\/favicon(\.ico)?$/, (req, res) => {
+  const st = load();
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+  if (req.query.preview) return res.type('image/svg+xml').send(faviconSvg(cleanFavicon(req.query)));
+  const f = cleanFavicon(st.settings.favicon);
+  if (f.mode === 'image' && st.settings.faviconType && fs.existsSync(FAV_FILE)) return res.type(st.settings.faviconType).send(fs.readFileSync(FAV_FILE));
+  res.type('image/svg+xml').send(faviconSvg(f));
+});
 app.post('/api/setup', setup);
 app.post('/api/login', login);
 app.post('/api/logout', logout);
@@ -68,6 +104,7 @@ function cleanPages(pages) {
     name: String(p.name || 'Onglet').slice(0, 40),
     icon: /^lucide:[a-z0-9-]{1,60}$/.test(p.icon || '') ? p.icon : String(p.icon || '').slice(0, 8),
     ...(p.free ? { free: true } : {}),
+    ...(p.hideMobile ? { hideMobile: true } : {}),
     widgets: (p.widgets || []).filter(w => WIDGETS[w.type]).map(w => {
       const cfg = w.config && typeof w.config === 'object' ? w.config : {};
       if (w.type === 'bookmarks') {
@@ -108,13 +145,19 @@ app.put('/api/pages', requireAdmin, wrap(req => {
 
 app.put('/api/settings', requireAdmin, wrap(req => {
   const st = load();
-  const { title, publicView, greeting, sessionHours, rememberDays, theme, linkTarget } = req.body || {};
+  const { title, publicView, greeting, sessionHours, rememberDays, theme, linkTarget, favicon, faviconImage } = req.body || {};
   if (title !== undefined) st.settings.title = String(title).slice(0, 40) || 'Mon dashboard';
   if (publicView !== undefined) st.settings.publicView = !!publicView;
   if (greeting !== undefined) st.settings.greeting = !!greeting;
   if (sessionHours !== undefined) st.settings.sessionHours = Math.min(8760, Math.max(1, Number(sessionHours) || 168));
   if (theme !== undefined) st.settings.theme = cleanTheme(theme);
   if (linkTarget !== undefined) st.settings.linkTarget = linkTarget === 'same' ? 'same' : 'new';
+  if (favicon !== undefined) st.settings.favicon = { ...cleanFavicon(favicon), v: Date.now() };
+  if (faviconImage !== undefined) {
+    if (!faviconImage) { try { fs.unlinkSync(FAV_FILE); } catch { /* déjà absent */ } delete st.settings.faviconType; }
+    else { const img = parseFavImage(faviconImage); fs.writeFileSync(FAV_FILE, img.buf); st.settings.faviconType = img.type; }
+    st.settings.favicon = { ...cleanFavicon(st.settings.favicon), v: Date.now() };
+  }
   if (rememberDays !== undefined) st.settings.rememberDays = Math.min(365, Math.max(1, Number(rememberDays) || 30));
   save();
   return { settings: st.settings };
@@ -358,7 +401,7 @@ const INDEX_HTML = fs.readFileSync(path.resolve('public/index.html'), 'utf8')
   .replace(/(href|src)="\/(app\.js|style\.css|theme\.css)"/g, `$1="/$2?v=${encodeURIComponent(APP_VERSION)}"`);
 app.get(/^\/(?!api\/).*/, (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
-  res.type('html').send(INDEX_HTML);
+  res.type('html').send(INDEX_HTML.replace('href="/favicon"', `href="/favicon?v=${load().settings.favicon?.v || 0}"`));
 });
 
 app.listen(PORT, () => {
