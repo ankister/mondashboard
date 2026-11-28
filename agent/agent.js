@@ -12,7 +12,7 @@ const zlib = require('node:zlib');
 const crypto = require('node:crypto');
 const { execFile, spawn } = require('node:child_process');
 
-const VERSION = '1.2.2';
+const VERSION = '1.3.0';
 const env = (k, d) => (process.env[k] === undefined || process.env[k] === '' ? d : process.env[k]);
 const CFG = {
   token: env('HD_TOKEN', ''),
@@ -626,7 +626,13 @@ async function remoteDigest(url, depth = 0) {
   if (!res.ok) throw new Error(`registre ${res.status}`);
   return res.headers.get('docker-content-digest');
 }
+let imgRunning = false;
 async function checkImages() {
+  if (imgRunning) return;
+  imgRunning = true;
+  try { await checkImagesNow(); } finally { imgRunning = false; }
+}
+async function checkImagesNow() {
   const c = await containers();
   if (!c.list) return;
   const images = [...new Set(c.list.map(x => x.image))];
@@ -649,6 +655,27 @@ async function checkImages() {
   state.imagesAt = new Date().toISOString();
 }
 
+// ---------------------------------------------------------------- vérification à la demande
+// Bouton « Vérifier les mises à jour » du widget. Sur Unraid, on lance aussi la vérification
+// d'Unraid (celle de « Check for Updates ») pour que son onglet Docker affiche la même chose.
+const UNRAID_CHECK = '/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate';
+let unraidCheck = { running: false, at: null, code: null };
+function unraidCheckNow() {
+  if (unraidCheck.running) return;
+  unraidCheck = { running: true, at: new Date().toISOString(), code: null };
+  const child = spawn('nsenter', ['-t', '1', '-m', '-u', '-i', '-n', '-p', '--', UNRAID_CHECK, 'check', 'nonotify'], { stdio: 'ignore' });
+  const killer = setTimeout(() => child.kill('SIGTERM'), 600e3);
+  const end = code => { clearTimeout(killer); unraidCheck = { running: false, at: new Date().toISOString(), code }; log('vérification Unraid terminée, code', code); };
+  child.on('error', () => end('ERR'));
+  child.on('close', end);
+}
+async function refreshNow() {
+  scanSmart(); checkUpdates();
+  checkImages().catch(e => log('vérification des images', e.message));
+  if ((await staticInfo()).unraid) unraidCheckNow();
+  return { ok: true, started: true };
+}
+
 // ---------------------------------------------------------------- rapport
 async function report() {
   const [info, m, t, fsys, ct] = await Promise.all([staticInfo(), meminfo(), temps(), filesystems(), containers()]);
@@ -664,6 +691,7 @@ async function report() {
     aptJob, canSystem: CFG.allowSystem && state.apt !== null,
     rebootRequired: exists(H('/run/reboot-required')) || exists(H('/var/run/reboot-required')),
     containers: ct.list, dockerError: ct.error || null, imagesAt: state.imagesAt,
+    imageCheck: { running: imgRunning || unraidCheck.running, at: state.imagesAt, unraid: unraidCheck },
     actionsEnabled: CFG.allowActions
   };
 }
@@ -693,7 +721,7 @@ if (CFG.mode === 'pull') {
         if (req.method === 'GET' && req.url === '/v1/report') return send(200, await report());
         const m = req.url.match(/^\/v1\/docker\/([a-f0-9]{12,64})\/(start|stop|restart|update)$/);
         if (req.method === 'POST' && m) return send(200, m[2] === 'update' ? await containerUpdate(m[1]) : await dockerAction(m[1], m[2]));
-        if (req.method === 'POST' && req.url === '/v1/refresh') { scanSmart(); checkUpdates(); checkImages(); return send(200, { ok: true }); }
+        if (req.method === 'POST' && req.url === '/v1/refresh') return send(200, await refreshNow());
         const a = req.url.match(/^\/v1\/apt\/(upgrade|security|install)(?:\?pkgs=([^&]*))?$/);
         if (req.method === 'POST' && a) return send(200, aptStart(a[1], decodeURIComponent(a[2] || '').split(',').filter(Boolean)));
         send(404, { error: 'Inconnu' });
@@ -720,7 +748,7 @@ if (CFG.mode === 'push') {
       results = [];
       for (const c of r.commands || []) {
         try {
-          if (c.op === 'refresh') { scanSmart(); checkUpdates(); checkImages(); results.push({ id: c.id, ok: true }); }
+          if (c.op === 'refresh') { await refreshNow(); results.push({ id: c.id, ok: true }); }
           else if (c.op === 'apt') { aptStart(c.aptOp, c.packages || []); results.push({ id: c.id, ok: true }); }
           else if (c.op === 'update') { await containerUpdate(c.containerId); results.push({ id: c.id, ok: true }); }
           else { await dockerAction(c.containerId, c.op); results.push({ id: c.id, ok: true }); }

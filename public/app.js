@@ -140,6 +140,16 @@ function reloadThemeCss() {
 // onglet qui contient le widget (et pas l'onglet affiché : une requête différée peut partir après un changement d'onglet)
 const pageOf = w => (S.dash.pages.find(p => p.widgets.some(x => x.id === w.id)) || page()).id;
 
+// Réglage « Ouverture des liens » : en mode « même onglet », un clic simple sur un lien externe
+// remplace la page (Ctrl/Cmd/Maj/clic molette gardent le comportement normal du navigateur).
+document.addEventListener('click', e => {
+  if (S.dash?.settings?.linkTarget !== 'same' || e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+  const a = e.target.closest('a[target="_blank"]');
+  if (!a || !/^https?:/i.test(a.href) || a.closest('.modal')) return;
+  e.preventDefault();
+  location.href = a.href;
+});
+
 async function boot() {
   stopTimers();
   S.session = await api('/session');
@@ -1493,6 +1503,18 @@ const RENDER = {
           localStorageSet('hd_dsort_' + w.id, JSON.stringify({ sort: f.sort, dir: f.dir }));
           return re();
         }
+        // vérifier maintenant les mises à jour sur toutes les machines du widget
+        if (e.target.closest('[data-dcheck]')) {
+          const checks = (S.cache[w.id]?.checks || []).filter(x => x.canCheck);
+          (S.dockCheck ||= {})[w.id] = Date.now();
+          re();
+          const res = await Promise.allSettled(checks.map(x => api(`/widgets/${pageOf(w)}/${w.id}/action`, { method: 'POST', body: { op: 'check', integrationId: x.integrationId } })));
+          const ko = res.filter(r => r.status === 'rejected');
+          toast(ko.length ? `Vérification refusée sur ${ko.length} machine(s) : ${ko[0].reason.message}` : `Vérification lancée sur ${checks.length} machine(s)`, !!ko.length);
+          (S.dockLive ||= {})[w.id] = true;
+          setTimeout(() => loadWidget(w), 2500);
+          return;
+        }
         // mise à jour de l'image : un conteneur ou tous
         const u = e.target.closest('[data-cupd]');
         if (u) {
@@ -1553,7 +1575,16 @@ const RENDER = {
         .sort((a, b) => cmp(a, b) * f.dir || a.host.localeCompare(b.host) || a.name.localeCompare(b.name));
       const th = (k, label) => `<th data-sort="${k}" class="sortable ${f.sort === k ? 'on' : ''}" title="Trier">${label}${f.sort === k ? (f.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
       // suivi des mises à jour en cours : on rafraîchit vite tant qu'il y en a
-      (S.dockLive ||= {})[w.id] = all.some(jobActive);
+      // vérification des images : état par machine
+      const checks = d.checks || [];
+      const since = S.dockCheck?.[w.id] || 0;
+      const checking = checks.some(x => x.running) || (since && Date.now() - since < 300e3 && checks.some(x => x.canCheck && !(Date.parse(x.at || 0) > since)));
+      if (since && !checking) S.dockCheck[w.id] = 0;
+      const newest = Math.max(0, ...checks.map(x => Date.parse(x.at || 0) || 0));
+      const ago = t => { const m = Math.round((Date.now() - t) / 60e3); return m < 1 ? 'à l\'instant' : m < 60 ? `il y a ${m} min` : `il y a ${Math.round(m / 60)} h`; };
+      const checkInfo = checking ? `<span class="small" style="color:var(--accent)">⏳ Vérification en cours (${esc(checks.filter(x => x.running || !(Date.parse(x.at || 0) > since)).map(x => x.host).join(', '))})…</span>`
+        : newest ? `<span class="small muted" title="${esc(checks.map(x => `${x.host} : ${x.at ? new Date(x.at).toLocaleString('fr-FR') : 'jamais'}`).join('\n'))}">vérifié ${ago(newest)}</span>` : '';
+      (S.dockLive ||= {})[w.id] = all.some(jobActive) || checking;
       if (S.dockLive[w.id]) { clearTimeout(S.dockPoll?.[w.id]); (S.dockPoll ||= {})[w.id] = setTimeout(() => loadWidget(w), 4000); }
       const jobCell = c => {
         const j = c.job; if (!j) return '';
@@ -1580,7 +1611,9 @@ const RENDER = {
         ? '<div class="help" style="margin-bottom:8px">Actions indisponibles sur ces sources. Pour démarrer / arrêter / redémarrer, installe l\'agent Mon dashboard sur la machine (⚙ Administration → Intégrations → Agent Mon dashboard) avec « Autoriser start / stop / restart », puis sélectionne-le dans ce widget.</div>' : '';
       return `${noActs}
         <div class="dk-sum muted small"><span>${all.length} conteneur(s) · <span class="st-running">${running} actif(s)</span> · <span class="st-exited">${all.length - running} arrêté(s)</span>${outdated ? ` · <span style="color:var(--warn)">⬆ ${outdated} image(s) à mettre à jour</span>` : ''}</span>
-          ${updatable > 1 && canEdit() ? `<button class="btn sm" data-cupd="all">⬆ Tout mettre à jour (${updatable})</button>` : ''}</div>
+          <span class="dk-act">${checkInfo}
+          ${canEdit() && checks.some(x => x.canCheck) ? `<button class="btn sm" data-dcheck ${checking ? 'disabled' : ''} title="Interroge les registres maintenant${checks.some(x => x.unraid) ? ' ; sur Unraid, lance aussi « Check for Updates »' : ''}">⟳ Vérifier les mises à jour</button>` : ''}
+          ${updatable > 1 && canEdit() ? `<button class="btn sm" data-cupd="all">⬆ Tout mettre à jour (${updatable})</button>` : ''}</span></div>
         <div style="overflow-x:auto"><table class="tbl">
           <thead><tr>${th('host', 'Hôte')}${th('name', 'Conteneur')}${th('update', 'Image / MAJ')}${th('state', 'État')}<th></th></tr></thead>
           <tbody>${list.map(c => `<tr>
@@ -2697,6 +2730,12 @@ function adminSettings(box) {
     <form class="form" id="setForm">
       <label>Titre du site<input name="title" value="${esc(st.title)}"></label>
       <label class="chk"><input type="checkbox" name="greeting" ${st.greeting !== false ? 'checked' : ''}> Afficher le message d'accueil (sinon le titre)</label>
+      <label>Ouverture des liens (favoris, applications, articles…)
+        <select name="linkTarget">
+          <option value="new" ${st.linkTarget !== 'same' ? 'selected' : ''}>Dans un nouvel onglet</option>
+          <option value="same" ${st.linkTarget === 'same' ? 'selected' : ''}>Dans le même onglet (à la place du dashboard)</option>
+        </select></label>
+      <div class="help">Ctrl+clic ou clic molette ouvre toujours un nouvel onglet.</div>
       <label class="chk"><input type="checkbox" name="publicView" ${st.publicView ? 'checked' : ''}> Consultation sans connexion (lecture seule ; les actions restent réservées à l'admin)</label>
       <div class="row2">
         <label>Session sans « Rester connecté » (heures)<input type="number" name="sessionHours" min="1" value="${st.sessionHours || 168}"></label>
@@ -2716,7 +2755,7 @@ function adminSettings(box) {
     e.preventDefault();
     const f = e.target;
     try {
-      const r = await api('/settings', { method: 'PUT', body: { title: f.title.value, greeting: f.greeting.checked, publicView: f.publicView.checked, sessionHours: f.sessionHours.value, rememberDays: f.rememberDays.value } });
+      const r = await api('/settings', { method: 'PUT', body: { title: f.title.value, greeting: f.greeting.checked, publicView: f.publicView.checked, sessionHours: f.sessionHours.value, rememberDays: f.rememberDays.value, linkTarget: f.linkTarget.value } });
       S.dash.settings = r.settings; S.session.title = r.settings.title; document.title = r.settings.title;
       toast('Paramètres enregistrés ✓');
       renderApp();

@@ -107,12 +107,13 @@ app.put('/api/pages', requireAdmin, wrap(req => {
 
 app.put('/api/settings', requireAdmin, wrap(req => {
   const st = load();
-  const { title, publicView, greeting, sessionHours, rememberDays, theme } = req.body || {};
+  const { title, publicView, greeting, sessionHours, rememberDays, theme, linkTarget } = req.body || {};
   if (title !== undefined) st.settings.title = String(title).slice(0, 40) || 'Mon dashboard';
   if (publicView !== undefined) st.settings.publicView = !!publicView;
   if (greeting !== undefined) st.settings.greeting = !!greeting;
   if (sessionHours !== undefined) st.settings.sessionHours = Math.min(8760, Math.max(1, Number(sessionHours) || 168));
   if (theme !== undefined) st.settings.theme = cleanTheme(theme);
+  if (linkTarget !== undefined) st.settings.linkTarget = linkTarget === 'same' ? 'same' : 'new';
   if (rememberDays !== undefined) st.settings.rememberDays = Math.min(365, Math.max(1, Number(rememberDays) || 30));
   save();
   return { settings: st.settings };
@@ -252,7 +253,7 @@ async function widgetData(w) {
       if (!w.integrations?.length) return { empty: true };
       const { results, errors } = await fromIntegrations(w, kind);
       if (kind === 'machine' || kind === 'torrents') return { ...(results[0] || {}), errors, offline: !results.length };
-      if (kind === 'docker') return { containers: results.flatMap(r => r.containers), errors };
+      if (kind === 'docker') return { containers: results.flatMap(r => r.containers), checks: results.flatMap(r => r.checks || []), errors };
       if (kind === 'media') return { sessions: results.flatMap(r => r.sessions), errors };
       if (kind === 'analytics') return { sites: results.flatMap(r => r.sites), period: results[0]?.period, errors };
       if (kind === 'calendar') {
