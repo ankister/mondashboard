@@ -1115,3 +1115,13 @@ span.bk-run { border: 0; }
 .widget:has(.srch) { overflow: visible; }
 .grid-stack-item:has(.srch) { z-index: 5; }
 .grid-stack-item:has(.srch) > .grid-stack-item-content { overflow: visible !important; }
+
+/* ---------- Uptime Kuma ---------- */
+.kuma-g { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 10px 6px 2px; }
+.kuma-g:first-child { margin-top: 0; }
+.up-row.maint .up-dot { background: #60a5fa; }
+.up-bar i.maint { background: #60a5fa; }
+.kuma-maint { color: #60a5fa; background: color-mix(in srgb, #60a5fa 12%, transparent); }
+.kuma-link { color: var(--muted); text-decoration: none; }
+.kuma-link:hover { color: var(--accent); }
+.kuma-bar i { min-width: 3px; }

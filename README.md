@@ -115,6 +115,7 @@ L'intégration Glances reste disponible si tu as déjà Glances quelque part, ma
 | **Nginx Proxy Manager** | URL de l'interface d'administration (port 81) et un compte NPM sans double authentification. Hôtes proxy, certificats qui expirent, activation / désactivation. |
 | **Backrest** | URL (port 9898) et, si l'authentification est activée, un utilisateur. État des plans, historique, prochaine exécution, lancement manuel. |
 | **rest-server (restic)** | URL, un utilisateur du `.htpasswd` et les dépôts à suivre. Nombre de snapshots, taille, sauvegarde en cours ; l'heure de la dernière sauvegarde est déduite de l'apparition des snapshots. |
+| **Uptime Kuma** | URL d'Uptime Kuma et l'identifiant (slug) d'une page de statut publiée (Pages de statut → nouvelle page, ajoute tes sondes). Sans mot de passe. Coche « Afficher l'expiration des certificats » dans la page pour les voir aussi. |
 | **Disponibilité** | Sans intégration : liste d'adresses web ou `hôte:port` vérifiées en tâche de fond (historique 24 h et 90 jours dans `data/uptime.json`, expiration des certificats HTTPS). |
 | **Recherche** | Sans intégration : DuckDuckGo, Google, Bing, Qwant, Ecosia, Brave, Startpage, SearXNG ou adresse personnalisée ; suggestions, favoris correspondants, touche « / ». |
 

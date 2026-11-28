@@ -333,7 +333,7 @@ async function widgetData(w) {
       if (kind === 'machine' || kind === 'torrents') return { ...(results[0] || {}), errors, offline: !results.length };
       if (kind === 'docker') return { containers: results.flatMap(r => r.containers), checks: results.flatMap(r => r.checks || []), errors };
       if (kind === 'media') return { sessions: results.flatMap(r => r.sessions), errors };
-      if (kind === 'dns' || kind === 'proxy') return { servers: results, errors };
+      if (kind === 'dns' || kind === 'proxy' || kind === 'kuma') return { servers: results, errors };
       if (kind === 'backup') return { items: results.flatMap(r => r.items || []), errors };
       if (kind === 'ha') return { ...(results[0] || { entities: [] }), errors, offline: !results.length };
       if (kind === 'analytics') return { sites: results.flatMap(r => r.sites), period: results[0]?.period, errors };

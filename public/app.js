@@ -2618,6 +2618,50 @@ const RENDER = {
     }
   },
 
+  kuma: {
+    dyn(d, w) {
+      const cfg = w.config || {};
+      const sv = d.servers || [];
+      if (!sv.length) return '<div class="empty">Uptime Kuma injoignable</div>';
+      const nb = Math.max(10, Math.min(60, Number(cfg.beats) || 40));
+      const rows = Math.max(0, Math.min(50, Number(cfg.rows) || 0));
+      const pct = v => (v == null ? '—' : `${v >= 99.995 ? '100' : v.toLocaleString('fr-FR', { maximumFractionDigits: v >= 99 ? 2 : 1 })} %`);
+      const dur = ms => { const m = Math.max(1, Math.round(ms / 60e3)); return m < 60 ? `${m} min` : m < 2880 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} j`; };
+      const hm = t => new Date(t).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+      const all = sv.flatMap(x => x.groups.flatMap(g => g.monitors));
+      const down = all.filter(m => m.status === 'down').length, up = all.filter(m => m.status === 'up').length;
+      const maint = all.filter(m => m.status === 'maintenance').length;
+      const compact = cfg.layout === 'Compacte';
+      const CL = { up: 'ok', down: 'ko', pending: 'slow', maintenance: 'maint' };
+      const row = m => {
+        const st = CL[m.status] || 'na';
+        const since = m.since ? (m.status === 'down' ? `<span class="up-err">hors ligne depuis ${dur(Date.now() - m.since)}</span>` : m.status === 'maintenance' ? 'en maintenance' : m.status === 'pending' ? 'en attente' : `en ligne depuis ${dur(Date.now() - m.since)}`) : '';
+        const cert = m.cert && m.cert.days <= 21 ? `<span class="up-cert ${m.cert.days <= 7 || !m.cert.valid ? 'ko' : ''}" title="Certificat HTTPS">${symHtml('lucide:lock')} ${!m.cert.valid ? 'invalide' : m.cert.days < 0 ? 'expiré' : `expire dans ${m.cert.days} j`}</span>` : '';
+        const bar = compact ? '' : `<span class="up-bar kuma-bar">${m.beats.slice(-nb).map(([s, ms, t]) => `<i class="${CL[s] || 'na'}" title="${t ? hm(t) : ''} · ${{ up: 'en ligne', down: 'en panne', pending: 'en attente', maintenance: 'maintenance' }[s] || s}${ms != null ? ` · ${ms} ms` : ''}"></i>`).join('')}</span>`;
+        return `<a class="up-row ${st}" href="${esc(m.admin)}" target="_blank" rel="noopener" title="${esc(m.name)} · 24 h : ${pct(m.uptime24)}${m.checked ? ` · vérifié à ${hm(m.checked)}` : ''}">
+          <span class="up-dot"></span>
+          <span class="up-n"><b>${esc(m.name)}</b>${cert}${compact ? '' : `<small>${since}</small>`}</span>
+          ${bar}
+          <span class="up-pct" title="Disponibilité sur 24 h">${pct(m.uptime24)}</span>
+          <span class="up-ms">${m.status === 'up' && m.ms != null ? `${Math.round(m.ms)} ms` : m.status === 'down' ? 'panne' : m.status === 'maintenance' ? 'maint.' : '—'}</span></a>`;
+      };
+      const order = list => (cfg.downFirst !== false ? [...list].sort((a, b) => (a.status === 'down' ? 0 : 1) - (b.status === 'down' ? 0 : 1)) : list);
+      const body = sv.map(x => {
+        const banners = [...x.incidents.map(i => `<div class="px-alert ${i.style === 'danger' ? 'ko' : ''}">${symHtml('lucide:triangle-alert')} <b>${esc(i.title)}</b>${i.content ? ` · ${esc(i.content)}` : ''}</div>`),
+          ...x.maintenance.map(t => `<div class="px-alert kuma-maint">${symHtml('lucide:wrench')} Maintenance : <b>${esc(t)}</b></div>`)].join('');
+        const head = sv.length > 1 ? `<div class="int-cat">${esc(x.title)}</div>` : '';
+        const groups = cfg.groups !== false
+          ? x.groups.filter(g => g.monitors.length).map(g => `${x.groups.length > 1 && g.name ? `<div class="kuma-g">${esc(g.name)}</div>` : ''}${order(g.monitors).map(row).join('')}`).join('')
+          : order(x.groups.flatMap(g => g.monitors)).map(row).join('');
+        return head + banners + groups;
+      }).join('');
+      return `<div class="up-sum"><span class="up-big ${down ? 'ko' : 'ok'}">${symHtml(down ? 'lucide:circle-alert' : 'lucide:circle-check')} ${up}/${all.length} en ligne</span>
+          ${down ? `<span class="up-err">${down} en panne</span>` : ''}${maint ? `<span style="color:#60a5fa">${maint} en maintenance</span>` : ''}
+          <a class="muted small up-avg kuma-link" href="${esc(sv[0].url)}" target="_blank" rel="noopener" title="Ouvrir la page de statut">${esc(sv.length === 1 ? sv[0].title : 'Uptime Kuma')} ↗</a></div>
+        <div class="up-list ${compact ? 'cmp' : ''} ${rows ? 'px-scroll' : ''}" style="${rows ? `--rows:${rows}` : ''}">${body || '<div class="empty small">Aucune sonde sur cette page de statut</div>'}</div>`;
+    }
+  },
+
   uptime: {
     dyn(d, w) {
       const cfg = w.config || {};
@@ -3654,7 +3698,7 @@ const INT_LOOK = {
   plex: ['media', 'plex', '#ebaf00'], jellyfin: ['media', 'jellyfin', '#00a4dc'], qbittorrent: ['media', 'qbittorrent', '#2f67ba'],
   homeassistant: ['home', 'homeassistant', '#18bcf2'],
   freshrss: ['read', 'freshrss', '#0062be'], calendar: ['read', 'lucide:calendar-days', '#e0743a'],
-  umami: ['web', 'umami', '#101010'], adguard: ['net', 'adguard', '#68bc71'], npm: ['net', 'nginxproxymanager', '#f15833'], backrest: ['backup', 'lucide:archive-restore', '#3f7fd8'], restserver: ['backup', 'lucide:database-backup', '#2b9a8f'], demo: ['other', 'lucide:flask-conical', '#6b7280'],
+  umami: ['web', 'umami', '#101010'], adguard: ['net', 'adguard', '#68bc71'], npm: ['net', 'nginxproxymanager', '#f15833'], uptimekuma: ['net', 'uptimekuma', '#5cdd8b'], backrest: ['backup', 'lucide:archive-restore', '#3f7fd8'], restserver: ['backup', 'lucide:database-backup', '#2b9a8f'], demo: ['other', 'lucide:flask-conical', '#6b7280'],
   mastodon: ['social', 'mastodon', '#6364ff'], bluesky: ['social', 'bluesky', '#1185fe'], threads: ['social', 'threads', '#101010'],
   xsocial: ['social', 'x', '#101010'], demosocial: ['social', 'lucide:share-2', '#6b7280']
 };
