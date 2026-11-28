@@ -7,6 +7,7 @@ import { setup, login, logout, changePassword, currentUser, requireAdmin, requir
 import { INTEGRATIONS, WIDGETS, publicMeta } from './lib/integrations/index.js';
 import { readFeed } from './lib/integrations/feeds.js';
 import { weather, geocode } from './lib/weather.js';
+import { quote, searchSymbol } from './lib/finance.js';
 import { ping } from './lib/http.js';
 import { seed } from './lib/seed.js';
 import { agentRoutes } from './lib/agentSetup.js';
@@ -235,6 +236,7 @@ app.post('/api/integrations/test', requireAdmin, wrap(async req => {
 }));
 
 app.get('/api/geocode', requireAdmin, wrap(req => geocode(String(req.query.q || ''))));
+app.get('/api/finance/search', requireAdmin, wrap(req => searchSymbol(String(req.query.q || '').slice(0, 60))));
 
 // ---------- Données des widgets ----------
 const cache = new Map(); // widgetId -> { at, data }
@@ -271,6 +273,8 @@ async function widgetData(w) {
     }
     case 'weather':
       return weather(cfg);
+    case 'stock':
+      return quote(cfg);
     case 'notes':
     case 'title':
       return {};

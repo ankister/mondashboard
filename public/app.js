@@ -521,6 +521,25 @@ function paintWidget(w, data) {
 }
 const errorsHtml = errs => (errs?.length ? errs.map(e => `<div class="w-warn">⚠ ${esc(e.name)} : ${esc(e.error)}</div>`).join('') : '');
 
+// ---------- cours : échelle du graphique et format des montants ----------
+function stkScale(pts, base) {
+  const vals = pts.map(p => p[1]);
+  if (base != null) vals.push(base);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (!isFinite(lo)) { lo = 0; hi = 1; }
+  const pad = (hi - lo) * 0.08 || Math.abs(hi) * 0.01 || 1;
+  return { lo: lo - pad, hi: hi + pad };
+}
+function stkMoney(v, d, noSym = false) {
+  const a = Math.abs(d.price);
+  const dg = a >= 1 ? 2 : a >= 0.01 ? 4 : 6;
+  const num = Number(v).toLocaleString('fr-FR', { minimumFractionDigits: dg, maximumFractionDigits: dg });
+  if (noSym || d.type === 'INDEX' || !d.currency) return num;
+  if (d.currency === 'GBp') return num + ' p';
+  try { return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: d.currency, currencyDisplay: 'narrowSymbol', minimumFractionDigits: dg, maximumFractionDigits: dg }).format(v); }
+  catch { return `${num} ${d.currency}`; }
+}
+
 // ================= Widgets =================
 const bar = (label, value, text) => `
   <div class="bar-row"><span class="lbl">${esc(label)}</span>
@@ -2031,7 +2050,7 @@ const RENDER = {
           ${cfg.showActive !== false ? `<div><b class="um-live">${online ? '<i></i>' : ''}${n(online)}</b><span>en ligne</span></div>` : ''}
           <div class="um-per muted small">${esc((d.period || '24 heures').toLowerCase())} · ${sites.length} site(s)</div>
         </div>
-        <div class="um-head"><span>Site</span>${cfg.showChart !== false ? '<span class="um-c-sp">Vues</span>' : ''}<span class="num">Visiteurs</span><span class="num">Vues</span><span class="num um-c-b">Rebond</span></div>
+        <div class="um-tbl"><div class="um-head"><span>Site</span>${cfg.showChart !== false ? '<span class="um-c-sp">Vues</span>' : ''}<span class="num">Visiteurs</span><span class="num">Vues</span><span class="num um-c-b">Rebond</span></div>
         <div class="um-list">${sites.map(x => `
           <a class="um-row" href="${esc(x.link)}" target="_blank" rel="noopener" title="Visites : ${n(x.visits)} · durée moyenne : ${dur(x.avgTime)}${x.error ? ' · ' + esc(x.error) : ''}">
             <span class="um-site">
@@ -2042,7 +2061,7 @@ const RENDER = {
             <span class="num"><b>${n(x.visitors)}</b>${delta(x.visitors, x.prevVisitors)}</span>
             <span class="num">${n(x.pageviews)}</span>
             <span class="num um-c-b">${x.bounce == null ? '–' : x.bounce + ' %'}</span>
-          </a>`).join('')}</div>`;
+          </a>`).join('')}</div></div>`;
     }
   },
   title: {
@@ -2125,6 +2144,62 @@ const RENDER = {
         if (!canEdit()) { cb.checked = !cb.checked; return; }
         await save(toggleTask(w.config?.content || '', Number(cb.dataset.line)));
       });
+    }
+  },
+
+  stock: {
+    bind(w, el) {
+      // survol / toucher du graphique : valeur et date du point
+      const move = e => {
+        const box = e.target.closest('.stk-chart'), d = S.cache[w.id];
+        if (!box || !d?.points?.length) return;
+        const r = box.getBoundingClientRect();
+        const i = Math.round(Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * (d.points.length - 1));
+        const [t, v] = d.points[i];
+        const { lo, hi } = stkScale(d.points, d.base);
+        const x = i / Math.max(1, d.points.length - 1) * r.width, y = (1 - (v - lo) / (hi - lo)) * r.height;
+        const tip = $('.stk-tip', box), line = $('.stk-vl', box), dot = $('.stk-dot', box);
+        const intraday = d.range === '1 jour' || d.range === '5 jours';
+        const dt = new Date(t).toLocaleString('fr-FR', intraday ? { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' } : { day: 'numeric', month: 'short', year: 'numeric' });
+        tip.innerHTML = `<b>${esc(stkMoney(v, d))}</b><span>${esc(dt)}</span>`;
+        tip.hidden = line.hidden = dot.hidden = false;
+        line.style.left = x + 'px'; dot.style.left = x + 'px'; dot.style.top = y + 'px';
+        const tw = tip.offsetWidth;
+        tip.style.left = Math.min(r.width - tw, Math.max(0, x - tw / 2)) + 'px';
+      };
+      const leave = () => $$('.stk-tip, .stk-vl, .stk-dot', el).forEach(x => { x.hidden = true; });
+      el.addEventListener('pointermove', move);
+      el.addEventListener('pointerdown', move);
+      el.addEventListener('pointerleave', leave);
+    },
+    dyn(d, w) {
+      const cfg = w.config || {};
+      const up = x => (x == null ? '' : x >= 0 ? 'up' : 'down');
+      const sign = x => (x > 0 ? '+' : x < 0 ? '−' : '');
+      const pctTxt = x => `${sign(x)}${Math.abs(x).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %`;
+      const H = Math.min(400, Math.max(40, Number(cfg.chartHeight) || 110));
+      const W = 600, pts = d.points || [];
+      const { lo, hi } = stkScale(pts, d.base);
+      const X = i => (i / Math.max(1, pts.length - 1) * W).toFixed(1), Y = v => ((1 - (v - lo) / (hi - lo)) * H).toFixed(1);
+      const line = pts.map((p, i) => `${X(i)},${Y(p[1])}`).join(' ');
+      const trend = up(d.rangeChange ?? d.dayChange) || 'up';
+      const gid = 'stkg' + w.id;
+      const svg = pts.length > 1 ? `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="${trend}">
+          <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".45"/><stop offset="1" stop-color="currentColor" stop-opacity=".03"/></linearGradient></defs>
+          ${d.base != null && d.base >= lo && d.base <= hi ? `<line x1="0" x2="${W}" y1="${Y(d.base)}" y2="${Y(d.base)}" class="stk-base" vector-effect="non-scaling-stroke"/>` : ''}
+          <polygon points="0,${H} ${line} ${W},${H}" fill="url(#${gid})"/>
+          <polyline points="${line}" fill="none" stroke="currentColor" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>` : '<div class="empty small">Pas assez de points sur cette période</div>';
+      const state = d.type === 'CRYPTOCURRENCY' ? '24 h/24' : d.open === true ? '<span style="color:var(--ok)">●</span> marché ouvert' : d.open === false ? 'marché fermé' : '';
+      const time = d.time ? new Date(d.time).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+      return `<div class="stk">
+        <div class="stk-top"><span class="stk-sym ${trend}">${symHtml(trend === 'down' ? 'lucide:trending-down' : 'lucide:trending-up')}<b>${esc(d.symbol)}</b></span>
+          ${d.dayChange != null ? `<span class="stk-day ${up(d.dayChange)}" title="Variation depuis la clôture précédente">${sign(d.dayChange)}${esc(stkMoney(Math.abs(d.dayChange), d, true))} (${pctTxt(d.dayPct)})</span>` : ''}</div>
+        <div class="stk-name" title="${esc(d.name)}">${esc(cfg.label || d.name)}</div>
+        <div class="stk-mid"><span class="stk-price">${esc(stkMoney(d.price, d))}</span>
+          ${d.rangePct != null && d.range !== '1 jour' ? `<span class="stk-rg"><span class="muted">${esc(d.range)}</span><b class="${up(d.rangeChange)}">${pctTxt(d.rangePct)}</b></span>` : `<span class="stk-rg"><span class="muted">${esc(d.range)}</span></span>`}</div>
+        <div class="stk-chart" style="height:${H}px">${svg}<i class="stk-vl" hidden></i><i class="stk-dot ${trend}" hidden></i><div class="stk-tip" hidden></div></div>
+        <div class="stk-foot muted small"><span>${[d.exchange === 'CCC' ? '' : esc(d.exchange), state].filter(Boolean).join(' · ')}</span>${time ? `<span title="Dernier cours">${esc(time)}</span>` : ''}</div>
+      </div>`;
     }
   },
 
@@ -2512,6 +2587,9 @@ function optionField(o, val) {
     case 'number': return `<label>${esc(o.label)}<input type="number" step="any" name="opt_${o.key}" value="${esc(v)}"></label>`;
     case 'select': return `<label>${esc(o.label)}<select name="opt_${o.key}">${o.options.map(x => `<option ${x === v ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>`;
     case 'textarea': return `<label>${esc(o.label)}<textarea name="opt_${o.key}">${esc(v)}</textarea></label>`;
+    case 'ticker': return `<label>${esc(o.label)}<div style="display:flex;gap:8px"><input name="opt_${o.key}" value="${esc(v)}" style="flex:1" placeholder="Nom ou symbole : apple, lvmh, or, bitcoin…" autocapitalize="characters"><button class="btn" type="button" data-tick>Rechercher</button></div></label>
+      <div class="geo-res" data-tickres></div>
+      <div class="help">Symboles Yahoo Finance. Exemples : <span class="mono">AAPL</span> (Apple), <span class="mono">MC.PA</span> (LVMH, Paris), <span class="mono">^FCHI</span> (CAC 40), <span class="mono">GC=F</span> (or, $/once), <span class="mono">BTC-EUR</span>, <span class="mono">ETH-EUR</span>, <span class="mono">EURUSD=X</span>.</div>`;
     case 'city': return `<label>${esc(o.label)}<div style="display:flex;gap:8px"><input name="opt_${o.key}" value="${esc(v)}" style="flex:1"><button class="btn" type="button" data-geo>Rechercher</button></div></label><div class="geo-res" data-geores></div>`;
     case 'icon': return `<label>${esc(o.label)}<span class="icon-field"><input type="hidden" name="opt_${o.key}" value="${esc(v)}">
       <button type="button" class="btn icon-pick" data-iconpick>${v ? symHtml(v) : '<span class="muted">Aucune</span>'}<span class="small muted">Choisir…</span></button></span></label>`;
@@ -2627,6 +2705,26 @@ function widgetForm(orig) {
     }
     drawBm();
   });
+
+  // --- recherche de symbole (cours) ---
+  $('[data-tick]', m.el)?.addEventListener('click', async () => {
+    const inp = form.opt_symbol, box = $('[data-tickres]', m.el);
+    const q = inp.value.trim();
+    if (!q) return;
+    box.innerHTML = '<span class="muted small">Recherche…</span>';
+    try {
+      const res = await api('/finance/search?q=' + encodeURIComponent(q));
+      box.innerHTML = res.map((r, i) => `<button type="button" class="btn sm" data-ti="${i}"><b class="mono">${esc(r.symbol)}</b> ${esc(r.name)} <span class="muted">${esc([r.type, r.exchange].filter(Boolean).join(' · '))}</span></button>`).join('') || '<span class="muted small">Aucun résultat. Essaie le nom en anglais ou le symbole.</span>';
+      box.onclick = e => {
+        const b = e.target.closest('[data-ti]');
+        if (!b) return;
+        const r = res[+b.dataset.ti];
+        inp.value = r.symbol;
+        box.innerHTML = `<span class="small" style="color:var(--ok)">✓ ${esc(r.symbol)} · ${esc(r.name)}${r.exchange ? ` (${esc(r.exchange)})` : ''}</span>`;
+      };
+    } catch (e) { box.innerHTML = `<span class="w-err">${esc(e.message)}</span>`; }
+  });
+  $('[data-tick]', m.el) && form.opt_symbol.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('[data-tick]', m.el).click(); } });
 
   // --- recherche de ville (météo) ---
   $('[data-geo]', m.el)?.addEventListener('click', async () => {

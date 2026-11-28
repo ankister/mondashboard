@@ -766,3 +766,39 @@ header.top { align-items: flex-start; }
   .toolbar [data-filter] { flex: 1 1 100% !important; min-width: 0 !important; }
   .dk-sum { gap: 6px; }
 }
+
+/* ---------- Cours (bourse, or, crypto) ---------- */
+.stk { display: flex; flex-direction: column; gap: 2px; }
+.stk .up { color: var(--ok); } .stk .down { color: var(--bad); }
+.stk-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.stk-sym { display: inline-flex; align-items: center; gap: 6px; font-size: 15px; }
+.stk-sym b { color: var(--text); letter-spacing: .3px; }
+.stk-day { font-size: 13px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.stk-name { color: var(--muted); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stk-mid { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; margin: 2px 0 8px; }
+.stk-price { font-size: 30px; font-weight: 700; line-height: 1.05; font-variant-numeric: tabular-nums; letter-spacing: -.5px; }
+.stk-rg { display: flex; flex-direction: column; align-items: flex-end; font-size: 12.5px; line-height: 1.3; }
+.stk-chart { position: relative; margin: 0 -2px; touch-action: pan-y; cursor: crosshair; }
+.stk-chart svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.stk-chart svg.up { color: var(--ok); } .stk-chart svg.down { color: var(--bad); }
+.stk-base { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 4; opacity: .6; }
+.stk-vl { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--muted); opacity: .6; pointer-events: none; }
+.stk-dot { position: absolute; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 2px var(--card); pointer-events: none; }
+.stk-dot.up { color: var(--ok); } .stk-dot.down { color: var(--bad); }
+.stk-tip { position: absolute; top: 2px; background: var(--bg2); border: 1px solid var(--line); border-radius: 7px; padding: 3px 8px; font-size: 12px; white-space: nowrap; pointer-events: none; display: flex; gap: 8px; box-shadow: 0 4px 14px #0004; }
+.stk-tip span { color: var(--muted); }
+.stk-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; }
+.stk-tip[hidden], .stk-vl[hidden], .stk-dot[hidden] { display: none; }
+
+/* ---------- Umami : colonnes adaptées à la largeur du widget (noms des sites lisibles) ---------- */
+.um-tbl { container-type: inline-size; }
+@container (max-width: 600px) {
+  .um-c-b { display: none !important; }
+  .um-head, .um-row { grid-template-columns: minmax(0, 1fr) 72px 70px 48px !important; gap: 8px; }
+  .um-spark { width: 72px; }
+  .um-tbl:not(:has(.um-spark)) .um-head, .um-tbl:not(:has(.um-spark)) .um-row { grid-template-columns: minmax(0, 1fr) 70px 48px !important; }
+}
+@container (max-width: 400px) {
+  .um-spark, .um-c-sp { display: none !important; }
+  .um-head, .um-row, .um-tbl:not(:has(.um-spark)) .um-head, .um-tbl:not(:has(.um-spark)) .um-row { grid-template-columns: minmax(0, 1fr) 64px 44px !important; }
+}

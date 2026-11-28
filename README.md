@@ -1,6 +1,6 @@
 # Mon dashboard
 
-Dashboard modulaire et auto-hébergé : supervision des machines (CPU, RAM, réseau, GPU, SMART, mises à jour), conteneurs Docker de toutes les machines, activité Plex et Jellyfin, torrents qBittorrent (avec ajout), calendriers CalDAV (Nextcloud, Infomaniak) et Home Assistant, météo, flux FreshRSS et favoris avec statut en ligne / hors ligne.
+Dashboard modulaire et auto-hébergé : supervision des machines (CPU, RAM, réseau, GPU, SMART, mises à jour), conteneurs Docker de toutes les machines, activité Plex et Jellyfin, torrents qBittorrent (avec ajout), calendriers CalDAV (Nextcloud, Infomaniak) et Home Assistant, météo, cours de bourse et cryptos, flux FreshRSS et favoris avec statut en ligne / hors ligne.
 
 Tout se configure depuis l'interface : onglets, widgets (glisser-déposer, largeur), intégrations et favoris. Aucun fichier YAML à éditer.
 
@@ -109,6 +109,7 @@ L'intégration Glances reste disponible si tu as déjà Glances quelque part, ma
 | **Infomaniak (CalDAV)** | Adresse CalDAV indiquée dans les paramètres du calendrier, et ton mot de passe. Le mode « .ics » marche aussi avec un lien d'abonnement. |
 | **Home Assistant** | Profil → Sécurité → Jeton d'accès longue durée ; ajoute l'intégration « System Monitor » pour CPU et RAM |
 | **Météo** | Open-Meteo, sans clé. Recherche la ville dans la configuration du widget. |
+| **Cours (bourse, or, crypto)** | Graphique d'une action, d'un indice, de l'or ou d'une crypto via l'API publique de graphiques de Yahoo Finance (sans clé, non officielle). « Rechercher » trouve le symbole : `AAPL`, `MC.PA`, `^FCHI`, `GC=F`, `BTC-EUR`… |
 
 Une fois les vraies intégrations en place, supprime les intégrations « Démo » dans ⚙ Paramètres → Intégrations.
 
