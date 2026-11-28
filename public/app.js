@@ -2159,6 +2159,7 @@ const RENDER = {
         const { lo, hi } = stkScale(d.points, d.base);
         const x = i / Math.max(1, d.points.length - 1) * r.width, y = (1 - (v - lo) / (hi - lo)) * r.height;
         const tip = $('.stk-tip', box), line = $('.stk-vl', box), dot = $('.stk-dot', box);
+        if (!tip) return;
         const intraday = d.range === '1 jour' || d.range === '5 jours';
         const dt = new Date(t).toLocaleString('fr-FR', intraday ? { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' } : { day: 'numeric', month: 'short', year: 'numeric' });
         tip.innerHTML = `<b>${esc(stkMoney(v, d))}</b><span>${esc(dt)}</span>`;
@@ -2174,31 +2175,56 @@ const RENDER = {
     },
     dyn(d, w) {
       const cfg = w.config || {};
+      const layout = cfg.layout || 'Normale';
       const up = x => (x == null ? '' : x >= 0 ? 'up' : 'down');
       const sign = x => (x > 0 ? '+' : x < 0 ? '−' : '');
       const pctTxt = x => `${sign(x)}${Math.abs(x).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %`;
-      const H = Math.min(400, Math.max(40, Number(cfg.chartHeight) || 110));
-      const W = 600, pts = d.points || [];
-      const { lo, hi } = stkScale(pts, d.base);
-      const X = i => (i / Math.max(1, pts.length - 1) * W).toFixed(1), Y = v => ((1 - (v - lo) / (hi - lo)) * H).toFixed(1);
-      const line = pts.map((p, i) => `${X(i)},${Y(p[1])}`).join(' ');
+      const pts = d.points || [];
       const trend = up(d.rangeChange ?? d.dayChange) || 'up';
-      const gid = 'stkg' + w.id;
-      const svg = pts.length > 1 ? `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="${trend}">
+      // graphique en aire : H = hauteur en px, hover = infobulle au survol
+      const chart = (H, hover = true, cls = '') => {
+        const W = 600;
+        const { lo, hi } = stkScale(pts, d.base);
+        const X = i => (i / Math.max(1, pts.length - 1) * W).toFixed(1), Y = v => ((1 - (v - lo) / (hi - lo)) * H).toFixed(1);
+        const line = pts.map((p, i) => `${X(i)},${Y(p[1])}`).join(' ');
+        const gid = 'stkg' + w.id;
+        const svg = pts.length > 1 ? `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="${trend}">
           <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".45"/><stop offset="1" stop-color="currentColor" stop-opacity=".03"/></linearGradient></defs>
           ${d.base != null && d.base >= lo && d.base <= hi ? `<line x1="0" x2="${W}" y1="${Y(d.base)}" y2="${Y(d.base)}" class="stk-base" vector-effect="non-scaling-stroke"/>` : ''}
           <polygon points="0,${H} ${line} ${W},${H}" fill="url(#${gid})"/>
-          <polyline points="${line}" fill="none" stroke="currentColor" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>` : '<div class="empty small">Pas assez de points sur cette période</div>';
+          <polyline points="${line}" fill="none" stroke="currentColor" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>` : '<div class="empty small">Pas assez de points</div>';
+        return `<div class="stk-chart ${cls}" style="height:${H}px">${svg}${hover ? `<i class="stk-vl" hidden></i><i class="stk-dot ${trend}" hidden></i><div class="stk-tip" hidden></div>` : ''}</div>`;
+      };
       const state = d.type === 'CRYPTOCURRENCY' ? '24 h/24' : d.open === true ? '<span style="color:var(--ok)">●</span> marché ouvert' : d.open === false ? 'marché fermé' : '';
       const time = d.time ? new Date(d.time).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+      const name = esc(cfg.label || d.name);
+      const symTag = `<span class="stk-sym ${trend}">${symHtml(trend === 'down' ? 'lucide:trending-down' : 'lucide:trending-up')}<b>${esc(d.symbol)}</b></span>`;
+      const price = `<span class="stk-price">${esc(stkMoney(d.price, d))}</span>`;
+      const dayTxt = d.dayChange != null ? `<span class="stk-day ${up(d.dayChange)}" title="Variation depuis la clôture précédente">${sign(d.dayChange)}${esc(stkMoney(Math.abs(d.dayChange), d, true))} (${pctTxt(d.dayPct)})</span>` : '';
+      const dayPct = d.dayPct != null ? `<span class="stk-day ${up(d.dayChange)}" title="Variation du jour">${pctTxt(d.dayPct)}</span>` : '';
+      const rng = d.rangePct != null && d.range !== '1 jour' ? `<span class="stk-rg"><span class="muted">${esc(d.range)}</span><b class="${up(d.rangeChange)}">${pctTxt(d.rangePct)}</b></span>` : `<span class="stk-rg"><span class="muted">${esc(d.range)}</span></span>`;
+      const foot = `<div class="stk-foot muted small"><span>${[d.exchange === 'CCC' ? '' : esc(d.exchange), state].filter(Boolean).join(' · ')}</span>${time ? `<span title="Dernier cours">${esc(time)}</span>` : ''}</div>`;
+
+      if (layout === 'Mini') return `<div class="stk stk-mini" title="${esc(d.name)} · ${esc(d.range)}${d.rangePct != null && d.range !== '1 jour' ? ' : ' + pctTxt(d.rangePct) : ''}">
+        <div class="stk-mini-l">${symTag}<span class="stk-name">${name}</span></div>
+        ${chart(34, false, 'stk-spark')}
+        <div class="stk-mini-r">${price}${dayPct}</div></div>`;
+      if (layout === 'Bandeau') return `<div class="stk stk-band">
+        <div class="stk-band-l">${symTag}<span class="stk-name">${name}</span></div>
+        <div class="stk-band-p">${price}${dayTxt}</div>
+        ${chart(58, true, 'stk-band-c')}
+        ${rng}</div>`;
+      if (layout === 'Compacte') return `<div class="stk stk-cmp">
+        <div class="stk-cmp-h"><div class="stk-cmp-l">${symTag}<span class="stk-name">${name}</span></div>
+          <div class="stk-cmp-r">${price}<span class="stk-cmp-ch">${dayTxt}${d.rangePct != null && d.range !== '1 jour' ? `<span class="muted small">${esc(d.range)} <b class="${up(d.rangeChange)}">${pctTxt(d.rangePct)}</b></span>` : ''}</span></div></div>
+        ${chart(56)}</div>`;
+      const H = Math.min(400, Math.max(40, Number(cfg.chartHeight) || 110));
       return `<div class="stk">
-        <div class="stk-top"><span class="stk-sym ${trend}">${symHtml(trend === 'down' ? 'lucide:trending-down' : 'lucide:trending-up')}<b>${esc(d.symbol)}</b></span>
-          ${d.dayChange != null ? `<span class="stk-day ${up(d.dayChange)}" title="Variation depuis la clôture précédente">${sign(d.dayChange)}${esc(stkMoney(Math.abs(d.dayChange), d, true))} (${pctTxt(d.dayPct)})</span>` : ''}</div>
-        <div class="stk-name" title="${esc(d.name)}">${esc(cfg.label || d.name)}</div>
-        <div class="stk-mid"><span class="stk-price">${esc(stkMoney(d.price, d))}</span>
-          ${d.rangePct != null && d.range !== '1 jour' ? `<span class="stk-rg"><span class="muted">${esc(d.range)}</span><b class="${up(d.rangeChange)}">${pctTxt(d.rangePct)}</b></span>` : `<span class="stk-rg"><span class="muted">${esc(d.range)}</span></span>`}</div>
-        <div class="stk-chart" style="height:${H}px">${svg}<i class="stk-vl" hidden></i><i class="stk-dot ${trend}" hidden></i><div class="stk-tip" hidden></div></div>
-        <div class="stk-foot muted small"><span>${[d.exchange === 'CCC' ? '' : esc(d.exchange), state].filter(Boolean).join(' · ')}</span>${time ? `<span title="Dernier cours">${esc(time)}</span>` : ''}</div>
+        <div class="stk-top">${symTag}${dayTxt}</div>
+        <div class="stk-name" title="${esc(d.name)}">${name}</div>
+        <div class="stk-mid">${price}${rng}</div>
+        ${chart(H)}
+        ${foot}
       </div>`;
     }
   },

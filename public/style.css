@@ -802,3 +802,25 @@ header.top { align-items: flex-start; }
   .um-spark, .um-c-sp { display: none !important; }
   .um-head, .um-row, .um-tbl:not(:has(.um-spark)) .um-head, .um-tbl:not(:has(.um-spark)) .um-row { grid-template-columns: minmax(0, 1fr) 64px 44px !important; }
 }
+
+/* Cours : présentations Compacte, Bandeau, Mini */
+.stk-cmp-h { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 6px; }
+.stk-cmp-l { display: flex; flex-direction: column; min-width: 0; }
+.stk-cmp-r { display: flex; flex-direction: column; align-items: flex-end; text-align: right; }
+.stk-cmp .stk-price, .stk-band .stk-price { font-size: 22px; }
+.stk-cmp-ch { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; font-size: 12px; }
+.stk.stk-band { flex-direction: row; align-items: center; gap: 16px; }
+.stk-band-l { display: flex; flex-direction: column; min-width: 0; flex: 0 1 150px; }
+.stk-band-p { display: flex; flex-direction: column; flex: none; }
+.stk-band-p .stk-day { font-size: 12px; }
+.stk-band-c { flex: 1; min-width: 80px; margin: 0; }
+.stk-band .stk-rg { flex: none; }
+.stk.stk-mini { flex-direction: row; align-items: center; gap: 12px; }
+.stk-mini-l { display: flex; flex-direction: column; min-width: 0; flex: 1 1 0; }
+.stk-mini .stk-name { font-size: 12px; }
+.stk-spark { flex: 0 1 110px; min-width: 50px; margin: 0; cursor: default; }
+.stk-mini-r { display: flex; flex-direction: column; align-items: flex-end; flex: none; }
+.stk-mini .stk-price { font-size: 18px; }
+.stk-mini .stk-day { font-size: 12px; }
+@container (max-width: 380px) { .stk-band { flex-wrap: wrap; } .stk-band-c { flex-basis: 100%; order: 5; } }
+.w-dyn:has(.stk-band) { container-type: inline-size; }
