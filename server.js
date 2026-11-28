@@ -145,13 +145,15 @@ app.put('/api/pages', requireAdmin, wrap(req => {
 
 app.put('/api/settings', requireAdmin, wrap(req => {
   const st = load();
-  const { title, publicView, greeting, sessionHours, rememberDays, theme, linkTarget, favicon, faviconImage } = req.body || {};
-  if (title !== undefined) st.settings.title = String(title).slice(0, 40) || 'Mon dashboard';
+  const { title, publicView, greeting, sessionHours, rememberDays, theme, linkTarget, favicon, faviconImage, mobileWidth, mobileTabLabels } = req.body || {};
+  if (title !== undefined) st.settings.title = String(title).trim().slice(0, 40) || 'Mon dashboard';
   if (publicView !== undefined) st.settings.publicView = !!publicView;
   if (greeting !== undefined) st.settings.greeting = !!greeting;
   if (sessionHours !== undefined) st.settings.sessionHours = Math.min(8760, Math.max(1, Number(sessionHours) || 168));
   if (theme !== undefined) st.settings.theme = cleanTheme(theme);
   if (linkTarget !== undefined) st.settings.linkTarget = linkTarget === 'same' ? 'same' : 'new';
+  if (mobileWidth !== undefined) st.settings.mobileWidth = Math.min(2000, Math.max(320, Math.round(Number(mobileWidth)) || 760));
+  if (mobileTabLabels !== undefined) st.settings.mobileTabLabels = !!mobileTabLabels;
   if (favicon !== undefined) st.settings.favicon = { ...cleanFavicon(favicon), v: Date.now() };
   if (faviconImage !== undefined) {
     if (!faviconImage) { try { fs.unlinkSync(FAV_FILE); } catch { /* déjà absent */ } delete st.settings.faviconType; }
@@ -401,7 +403,9 @@ const INDEX_HTML = fs.readFileSync(path.resolve('public/index.html'), 'utf8')
   .replace(/(href|src)="\/(app\.js|style\.css|theme\.css)"/g, `$1="/$2?v=${encodeURIComponent(APP_VERSION)}"`);
 app.get(/^\/(?!api\/).*/, (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
-  res.type('html').send(INDEX_HTML.replace('href="/favicon"', `href="/favicon?v=${load().settings.favicon?.v || 0}"`));
+  const st = load();
+  const ttl = String(st.settings.title || 'Mon dashboard').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  res.type('html').send(INDEX_HTML.replace('href="/favicon"', `href="/favicon?v=${st.settings.favicon?.v || 0}"`).replace('<title>Mon dashboard</title>', `<title>${ttl}</title>`));
 });
 
 app.listen(PORT, () => {

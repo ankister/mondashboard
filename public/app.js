@@ -111,7 +111,7 @@ const S = {
   edit: false, pageId: null, timers: [], cache: {}, filters: {}
 };
 // onglets masqués sur téléphone : invisibles hors mode Modifier (on bascule alors sur le premier onglet visible)
-const tabShown = p => S.edit || !(p.hideMobile && window.matchMedia('(max-width: 759px)').matches);
+const tabShown = p => S.edit || !(p.hideMobile && MOBILE.matches);
 const page = () => {
   const vis = S.dash.pages.filter(tabShown);
   return vis.find(p => p.id === S.pageId) || vis[0] || S.dash.pages.find(p => p.id === S.pageId) || S.dash.pages[0];
@@ -230,13 +230,33 @@ function dateLine() {
   return `${s.charAt(0).toUpperCase() + s.slice(1)} · ${d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
 }
 
-// téléphone : même seuil que la grille à une colonne
-const MOBILE = window.matchMedia('(max-width: 759px)');
+// téléphone : largeur réglable (Paramètres → Général, 760 px par défaut), même seuil pour la grille à une colonne.
+// Les règles CSS « max-width: 759px » de la feuille de style sont réécrites avec le seuil choisi.
+let MOBILE_W = 760;
+let MOBILE = window.matchMedia('(max-width: 759px)');
+const MQ_RULES = [];
+const onMobileChange = () => { if (!S.edit && S.dash) renderApp(); };
+MOBILE.addEventListener('change', onMobileChange);
+function applyMobileWidth(v) {
+  const wd = Math.min(2000, Math.max(320, Math.round(Number(v)) || 760));
+  if (!MQ_RULES.length) {
+    for (const sh of document.styleSheets) {
+      let rs; try { rs = sh.cssRules; } catch { continue; } // feuille d'une autre origine
+      for (const r of rs) if (r instanceof CSSMediaRule && /max-width:\s*759px/.test(r.media.mediaText)) MQ_RULES.push(r);
+    }
+  }
+  if (wd === MOBILE_W) return;
+  MOBILE_W = wd;
+  for (const r of MQ_RULES) r.media.mediaText = `(max-width: ${wd - 1}px)`;
+  MOBILE.removeEventListener('change', onMobileChange);
+  MOBILE = window.matchMedia(`(max-width: ${wd - 1}px)`);
+  MOBILE.addEventListener('change', onMobileChange);
+}
 const shown = w => S.edit || !(w.hideMobile && MOBILE.matches);
-let mobileWatch = false;
 
 function renderApp() {
-  if (!mobileWatch) { mobileWatch = true; MOBILE.addEventListener('change', () => { if (!S.edit && S.dash) renderApp(); }); }
+  applyMobileWidth(S.dash?.settings?.mobileWidth);
+  document.body.classList.toggle('tab-labels', !!S.dash?.settings?.mobileTabLabels);
   stopTimers();
   const st = S.dash.settings;
   const p = page();
@@ -259,8 +279,8 @@ function renderApp() {
     </header>
     <nav class="tabs" id="tabs">
       ${S.dash.pages.filter(tabShown).map(pg => `
-        <button class="tab ${pg.id === p?.id ? 'active' : ''}" data-tab="${pg.id}" ${S.edit ? 'draggable="true"' : ''}>
-          ${pg.icon ? symHtml(pg.icon) : ''}${esc(pg.name)}${S.edit && pg.hideMobile ? '<span class="tab-mob" title="Masqué sur téléphone">📵</span>' : ''}
+        <button class="tab ${pg.id === p?.id ? 'active' : ''} ${pg.icon ? 'has-ic' : ''}" data-tab="${pg.id}" title="${esc(pg.name)}" ${S.edit ? 'draggable="true"' : ''}>
+          ${pg.icon ? symHtml(pg.icon) : ''}<span class="tab-name">${esc(pg.name)}</span>${S.edit && pg.hideMobile ? '<span class="tab-mob" title="Masqué sur téléphone">📵</span>' : ''}
           ${S.edit && pg.id === p?.id ? '<span class="tab-edit" data-act="edit-tab" title="Modifier l\'onglet">✎</span>' : ''}
         </button>`).join('')}
       ${S.edit ? '<button class="tab tab-add" data-act="add-tab">＋ Onglet</button>' : ''}
@@ -378,7 +398,7 @@ function initGrid(p) {
     column: 12, cellHeight: CELL, margin: GAP, mode: p.free ? 'float' : 'top', animate: true,
     handle: '.handle', staticGrid: !S.edit,
     resizable: { handles: 'e,se,s,sw,w' },
-    columnOpts: { breakpoints: [{ w: 760, c: 1 }], layout: 'list' }
+    columnOpts: { breakpoints: [{ w: MOBILE_W - 1, c: 1 }], breakpointForWindow: true, layout: 'list' }
   }, el);
   // ajuste les blocs « Auto » à leur contenu une fois affichés
   setTimeout(() => { $$('.grid-stack-item[gs-size-to-content]', el).forEach(i => GRID?.resizeToContent(i)); rdFitAll(); alignBlocks(); }, 50);
@@ -1579,10 +1599,18 @@ const RENDER = {
           return;
         }
         const b = e.target.closest('[data-op]');
-        if (!b) return;
+        if (!b) {
+          const x = e.target.closest('[data-dkx]');
+          if (x && !e.target.closest('button, a, .dkm-det')) {
+            const open = (S.dkOpen ||= {})[w.id] ||= new Set();
+            open.has(x.dataset.dkx) ? open.delete(x.dataset.dkx) : open.add(x.dataset.dkx);
+            re();
+          }
+          return;
+        }
         const verb = { start: 'Démarrer', stop: 'Arrêter', restart: 'Redémarrer' }[b.dataset.op];
         if (b.dataset.op !== 'start' && !confirm(`${verb} le conteneur « ${b.dataset.name} » ?`)) return;
-        const row = b.closest('tr');
+        const row = b.closest('tr, .dkm-row');
         $$('[data-op]', row).forEach(x => { x.disabled = true; });
         const st = $('.st-cell', row);
         if (st) st.innerHTML = `<span class="st-restarting">◌ <span class="small">${{ start: 'Démarrage', stop: 'Arrêt', restart: 'Redémarrage' }[b.dataset.op]} en cours…</span></span>`;
@@ -1647,11 +1675,35 @@ const RENDER = {
           : `<button class="iconbtn" data-op="start" data-cid="${c.id}" data-int="${c.integrationId}" data-name="${esc(c.name)}" title="Démarrer">▶</button>`}</span>` : '');
       const noActs = canEdit() && all.length && !all.some(c => c.canAct)
         ? '<div class="help" style="margin-bottom:8px">Actions indisponibles sur ces sources. Pour démarrer / arrêter / redémarrer, installe l\'agent Mon dashboard sur la machine (⚙ Paramètres → Intégrations → Agent Mon dashboard) avec « Autoriser start / stop / restart », puis sélectionne-le dans ce widget.</div>' : '';
-      return `${noActs}
+      const head = `${noActs}
         <div class="dk-sum muted small"><span>${all.length} conteneur(s) · <span class="st-running">${running} actif(s)</span> · <span class="st-exited">${all.length - running} arrêté(s)</span>${outdated ? ` · <span style="color:var(--warn)">⬆ ${outdated} image(s) à mettre à jour</span>` : ''}</span>
           <span class="dk-act">${checkInfo}
           ${canEdit() && checks.some(x => x.canCheck) ? `<button class="btn sm" data-dcheck ${checking ? 'disabled' : ''} title="Interroge les registres maintenant${checks.some(x => x.unraid) ? ' ; sur Unraid, lance aussi « Check for Updates »' : ''}">⟳ Vérifier les mises à jour</button>` : ''}
-          ${updatable > 1 && canEdit() ? `<button class="btn sm" data-cupd="all">⬆ Tout mettre à jour (${updatable})</button>` : ''}</span></div>
+          ${updatable > 1 && canEdit() ? `<button class="btn sm" data-cupd="all">⬆ Tout mettre à jour (${updatable})</button>` : ''}</span></div>`;
+      // téléphone : liste compacte (hôte, conteneur, état) ; un appui déplie image, détails et boutons
+      if (MOBILE.matches) {
+        const open = (S.dkOpen ||= {})[w.id] ||= new Set();
+        const stLbl = { running: 'actif', exited: 'arrêté', restarting: 'redémarre', paused: 'en pause', created: 'créé', dead: 'mort' };
+        const jobLbl = { queued: 'en attente', pulling: 'téléchargement', recreating: 'recréation' };
+        const mActs = c => (c.canAct && canEdit() && !jobActive(c) ? (c.state === 'running'
+          ? `<button class="btn sm" data-op="restart" data-cid="${c.id}" data-int="${c.integrationId}" data-name="${esc(c.name)}">↻ Redémarrer</button>
+             <button class="btn sm" data-op="stop" data-cid="${c.id}" data-int="${c.integrationId}" data-name="${esc(c.name)}">■ Arrêter</button>`
+          : `<button class="btn sm" data-op="start" data-cid="${c.id}" data-int="${c.integrationId}" data-name="${esc(c.name)}">▶ Démarrer</button>`) : '');
+        return `${head}
+        <div class="dkm-sort"><span class="muted small">Tri</span>${[['host', 'Hôte'], ['name', 'Nom'], ['update', 'MAJ'], ['state', 'État']].map(([k, l]) => `<button class="btn sm ${f.sort === k ? 'on' : ''}" data-sort="${k}">${l}${f.sort === k ? (f.dir > 0 ? ' ▲' : ' ▼') : ''}</button>`).join('')}</div>
+        <div class="dkm">${list.map(c => { const o = open.has(c.id); const act = jobActive(c); return `
+          <div class="dkm-row ${o ? 'open' : ''}" data-dkx="${c.id}">
+            <div class="dkm-main"><span class="host-pill">${esc(c.host)}</span>
+              <b class="dkm-n"><span>${esc(c.name)}</span>${c.imageUpdate && !act ? '<i class="dkm-up" title="Mise à jour disponible">⬆</i>' : ''}</b>
+              <span class="dkm-st st-cell ${act ? 'st-restarting' : `st-${esc(c.state)}`}">● <span class="small">${act ? esc(jobLbl[c.job.state] || 'en cours') : esc(stLbl[c.state] || c.state)}</span></span>
+              <span class="dkm-chev">›</span></div>
+            ${o ? `<div class="dkm-det">
+              <div class="mono small muted dkm-img">${esc(c.image)}</div>
+              <div class="small muted">${esc(c.status)}</div>${jobCell(c)}
+              <div class="dkm-acts">${updChip(c)}${mActs(c)}</div></div>` : ''}
+          </div>`; }).join('') || '<div class="empty">Aucun conteneur</div>'}</div>`;
+      }
+      return `${head}
         <div style="overflow-x:auto"><table class="tbl">
           <thead><tr>${th('host', 'Hôte')}${th('name', 'Conteneur')}${th('update', 'Image / MAJ')}${th('state', 'État')}<th></th></tr></thead>
           <tbody>${list.map(c => `<tr>
@@ -2309,7 +2361,7 @@ function editTab(pg) {
       <label>Nom<input name="name" value="${esc(pg?.name || '')}" required maxlength="40"></label>
       <label>Icône<span class="icon-field"><input type="hidden" name="icon" value="${esc(pg?.icon || '')}">
         <button type="button" class="btn icon-pick" data-iconpick>${pg?.icon ? symHtml(pg.icon) : '<span class="muted">Aucune</span>'}<span class="small muted">Choisir…</span></button></span></label></div>
-      <label class="chk"><input type="checkbox" name="hideMobile" ${pg?.hideMobile ? 'checked' : ''}> Masquer cet onglet sur téléphone (écran de moins de 760 px)</label>
+      <label class="chk"><input type="checkbox" name="hideMobile" ${pg?.hideMobile ? 'checked' : ''}> Masquer cet onglet sur téléphone (écran de moins de ${MOBILE_W} px)</label>
       ${pg ? '' : `<label>Contenu de départ<select name="tpl">
         <option value="">Onglet vide</option>
         <option value="reader">Lecteur RSS (FreshRSS) en pleine page</option>
@@ -2491,7 +2543,7 @@ function widgetForm(orig) {
         <label>Hauteur en px (0 = automatique, -1 = aligner)<input type="number" name="h" min="-1" step="10" value="${Number(w.h) || 0}"></label>
         ${orig.id ? `<label>Onglet<select name="tab">${S.dash.pages.map(pg => `<option value="${pg.id}" ${pg.id === page().id ? 'selected' : ''}>${/^lucide:/.test(pg.icon || '') ? '' : esc(pg.icon || '')} ${esc(pg.name)}</option>`).join('')}</select></label>` : '<div></div>'}
       </div>
-      <label class="chk"><input type="checkbox" name="hideMobile" ${w.hideMobile ? 'checked' : ''}> Masquer sur téléphone (écran de moins de 760 px)</label>
+      <label class="chk"><input type="checkbox" name="hideMobile" ${w.hideMobile ? 'checked' : ''}> Masquer sur téléphone (écran de moins de ${MOBILE_W} px)</label>
       ${orig.id ? `<label>Aligner le haut sur
         <select name="anchor">
           <option value="">— position libre —</option>
@@ -2922,7 +2974,8 @@ function adminSettings(box) {
   let favImage; // undefined : inchangée · '' : à supprimer · data URL : nouvelle image
   box.innerHTML = `
     <form class="form" id="setForm">
-      <label>Titre du site<input name="title" value="${esc(st.title)}"></label>
+      <label>Nom de la page<input name="title" value="${esc(st.title)}" placeholder="Mon dashboard" maxlength="40"></label>
+      <div class="help">Affiché dans l'onglet du navigateur, sur la page de connexion et en en-tête si le message d'accueil est désactivé. Laisser vide pour revenir à « Mon dashboard ».</div>
       <label class="chk"><input type="checkbox" name="greeting" ${st.greeting !== false ? 'checked' : ''}> Afficher le message d'accueil (sinon le titre)</label>
       <label>Ouverture des liens (favoris, applications, articles…)
         <select name="linkTarget">
@@ -2949,6 +3002,12 @@ function adminSettings(box) {
           </div>
         </div>
       </div>
+      <div class="section-lbl" style="margin-top:6px">Téléphone</div>
+      <div class="row2">
+        <label>Un écran est un téléphone en dessous de (px)<input type="number" name="mobileWidth" min="320" max="2000" step="1" value="${st.mobileWidth || 760}"></label>
+        <label class="chk" style="align-self:end"><input type="checkbox" name="mobileTabLabels" ${st.mobileTabLabels ? 'checked' : ''}> Afficher le nom des onglets sur téléphone</label>
+      </div>
+      <div class="help">Sous cette largeur : une colonne de widgets, présentations compactes, widgets et onglets « masqués sur téléphone » cachés. Par défaut 760 px. Sans la case, les onglets qui ont une icône n'affichent que l'icône.</div>
       <label class="chk"><input type="checkbox" name="publicView" ${st.publicView ? 'checked' : ''}> Consultation sans connexion (lecture seule ; les actions restent réservées à l'admin)</label>
       <div class="row2">
         <label>Session sans « Rester connecté » (heures)<input type="number" name="sessionHours" min="1" value="${st.sessionHours || 168}"></label>
@@ -3001,7 +3060,7 @@ function adminSettings(box) {
     const f = e.target;
     try {
       if (f.favMode.value === 'image' && !favImage && !st.faviconType) throw new Error('Choisis une image pour le favicon, ou repasse sur « Icône ».');
-      const body = { title: f.title.value, greeting: f.greeting.checked, publicView: f.publicView.checked, sessionHours: f.sessionHours.value, rememberDays: f.rememberDays.value, linkTarget: f.linkTarget.value,
+      const body = { title: f.title.value, greeting: f.greeting.checked, publicView: f.publicView.checked, sessionHours: f.sessionHours.value, rememberDays: f.rememberDays.value, linkTarget: f.linkTarget.value, mobileWidth: f.mobileWidth.value, mobileTabLabels: f.mobileTabLabels.checked,
         favicon: { mode: f.favMode.value === 'image' && favImage !== '' ? 'image' : 'icon', icon: f.favIcon.value || '🏠', color: f.favColor.value, bg: f.favBg.checked } };
       if (favImage !== undefined) body.faviconImage = favImage;
       const r = await api('/settings', { method: 'PUT', body });
