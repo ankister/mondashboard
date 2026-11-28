@@ -326,7 +326,7 @@ function widgetShell(w) {
   return `
   <div class="grid-stack-item" gs-id="${w.id}" gs-min-w="2" gs-min-h="6" gs-w="${w.w}" gs-h="${h > 0 ? rowsFor(h) : 12}" ${pos} ${w.anchor ? `data-anchor="${esc(w.anchor.id)}:${w.anchor.edge}"` : ''} ${h ? '' : 'gs-size-to-content="true"'} ${align ? 'data-align="1"' : ''}>
   <div class="grid-stack-item-content">
-  <section class="widget ${w.type === 'bookmarks' || (tcfg && !tcfg.card) ? 'bare' : ''} ${tcfg ? 'title-w' : ''} ${w.type === 'reader' ? 'rd-w' : ''} ${h ? 'fixed-h' : ''}" data-wid="${w.id}">
+  <section class="widget ${w.type === 'bookmarks' || (tcfg && !tcfg.card) || (w.type === 'search' && !w.config?.card) ? 'bare' : ''} ${tcfg || (w.type === 'search' && !w.config?.card) ? 'title-w' : ''} ${w.type === 'reader' ? 'rd-w' : ''} ${h ? 'fixed-h' : ''}" data-wid="${w.id}">
     <div class="w-head">
       ${S.edit ? '<span class="iconbtn handle" title="Glisser pour déplacer">⠿</span>' : ''}
       <div class="w-title">${esc(w.title)}${S.edit && w.hideMobile ? ' <span class="w-badge" title="Masqué sur téléphone">📵 masqué</span>' : ''}</div>
@@ -339,7 +339,7 @@ function widgetShell(w) {
     </div>
     <div class="w-body">
       ${r.static ? `<div class="w-static">${r.static(w)}</div>` : ''}
-      <div class="w-dyn">${r.static && ['bookmarks', 'title'].includes(w.type) ? '' : '<div class="skeleton"></div>'}</div>
+      <div class="w-dyn">${r.static && ['bookmarks', 'title', 'search'].includes(w.type) ? '' : '<div class="skeleton"></div>'}</div>
     </div>
   </section>
   </div></div>`;
@@ -474,6 +474,7 @@ function stopTimers() { S.timers.forEach(clearInterval); S.timers = []; }
 function startWidget(w) {
   if (w.type === 'notes') { RENDER.notes.bind(w, widgetEl(w.id)); return; }
   if (w.type === 'title') return;
+  if (w.type === 'search') { RENDER.search.bind(w, widgetEl(w.id)); return; }
   const load = () => loadWidget(w);
   load();
   S.timers.push(setInterval(() => { if (!document.hidden) load(); }, Math.max(3, w.refresh) * 1000));
@@ -520,6 +521,172 @@ function paintWidget(w, data) {
   fitWidget(w.id);
 }
 const errorsHtml = errs => (errs?.length ? errs.map(e => `<div class="w-warn">⚠ ${esc(e.name)} : ${esc(e.error)}</div>`).join('') : '');
+
+// ---------- barre de recherche ----------
+const SRCH = {
+  DuckDuckGo: ['https://duckduckgo.com/?q={q}', 'duckduckgo', '#de5833'], Google: ['https://www.google.com/search?q={q}', 'google', '#4285f4'],
+  Bing: ['https://www.bing.com/search?q={q}', '', '#0c8484'], Qwant: ['https://www.qwant.com/?q={q}', 'qwant', '#5c97ff'],
+  Ecosia: ['https://www.ecosia.org/search?q={q}', 'ecosia', '#36a84f'], Brave: ['https://search.brave.com/search?q={q}', 'brave', '#fb542b'],
+  Startpage: ['https://www.startpage.com/do/search?q={q}', 'startpage', '#6563ff'], SearXNG: ['', 'searxng', '#3050ff'], 'Personnalisé': ['', '', '']
+};
+let SRCH_SLASH = false;
+const srchEngines = cfg => Object.keys(SRCH).filter(e => (e !== 'SearXNG' || /^https?:\/\//i.test(cfg.searxUrl || '')) && (e !== 'Personnalisé' || /\{q\}/.test(cfg.customUrl || '')));
+function srchEngine(w) {
+  const list = srchEngines(w.config || {});
+  const mine = w.config?.switcher !== false && localStorageGet('hd_eng_' + w.id);
+  return mine && list.includes(mine) ? mine : list.includes(w.config?.engine) ? w.config.engine : 'DuckDuckGo';
+}
+function srchUrl(w, q) {
+  const e = srchEngine(w), cfg = w.config || {};
+  const tpl = e === 'SearXNG' ? `${String(cfg.searxUrl || '').replace(/\/+$/, '')}/search?q={q}` : e === 'Personnalisé' ? cfg.customUrl : SRCH[e]?.[0];
+  return tpl && /^https?:\/\//i.test(tpl) ? tpl.replace('{q}', encodeURIComponent(q)) : null;
+}
+function srchIcon(e) {
+  const [, b, c] = SRCH[e] || [];
+  return `<span class="srch-ic" style="${c ? `--c:${c}` : ''}"><span class="lic" style="--i:url('${b ? `/icons/brands/${b}.svg` : '/icons/lucide/search.svg'}')"></span></span>`;
+}
+// tous les liens des widgets Favoris (pour les proposer pendant la recherche)
+function srchLinks() {
+  const seen = new Set();
+  return (S.dash?.pages || []).flatMap(p => p.widgets).filter(x => x.type === 'bookmarks').flatMap(x => (x.config?.categories || []).flatMap(c => c.links || []))
+    .filter(l => { const k = (l.url || '').replace(/\/+$/, '').toLowerCase(); if (!k || seen.has(k)) return false; seen.add(k); return true; });
+}
+
+// ---------- Home Assistant : icônes, libellés et actions des entités ----------
+const HA_DOM = {
+  light: 'Lumières', switch: 'Interrupteurs & prises', input_boolean: 'Interrupteurs virtuels', fan: 'Ventilateurs', climate: 'Thermostats',
+  water_heater: 'Chauffe-eau', cover: 'Volets & portails', lock: 'Serrures', scene: 'Scènes', script: 'Scripts', automation: 'Automatisations',
+  button: 'Boutons', input_button: 'Boutons', media_player: 'Lecteurs média', sensor: 'Capteurs', binary_sensor: 'Détecteurs',
+  person: 'Personnes', device_tracker: 'Appareils suivis', vacuum: 'Aspirateurs', weather: 'Météo', sun: 'Soleil', camera: 'Caméras',
+  humidifier: 'Humidificateurs', siren: 'Sirènes', input_number: 'Valeurs', input_select: 'Listes', number: 'Valeurs', select: 'Listes'
+};
+function haIcon(e) {
+  if (e.icon) return e.icon;
+  const on = haOn(e), dc = e.deviceClass;
+  const byDc = { temperature: 'thermometer', humidity: 'droplets', moisture: 'droplets', power: 'zap', energy: 'zap', current: 'zap', voltage: 'zap',
+    battery: 'battery', illuminance: 'sun', pressure: 'gauge', co2: 'cloud', pm25: 'cloud', motion: 'footprints', occupancy: 'user', presence: 'user',
+    door: on ? 'door-open' : 'door-closed', garage_door: on ? 'door-open' : 'door-closed', window: 'app-window', opening: on ? 'door-open' : 'door-closed',
+    connectivity: 'wifi', plug: 'plug', outlet: 'plug', smoke: 'flame', gas: 'flame', timestamp: 'clock' };
+  const byDom = { light: on ? 'lightbulb' : 'lightbulb-off', switch: 'power', input_boolean: on ? 'toggle-right' : 'toggle-left',
+    fan: 'fan', climate: 'thermometer', water_heater: 'thermometer', cover: 'blinds', lock: e.state === 'locked' ? 'lock' : 'lock-open', scene: 'palette',
+    script: 'scroll-text', automation: 'workflow', button: 'circle-dot', input_button: 'circle-dot', media_player: 'speaker', person: 'user',
+    device_tracker: 'smartphone', vacuum: 'circle-power', sun: 'sun', weather: 'cloud-sun', camera: 'camera', humidifier: 'droplets', siren: 'bell' };
+  return 'lucide:' + ((dc && byDc[dc]) || byDom[e.domain] || 'activity');
+}
+function haOn(e) {
+  const st = e.state;
+  if (['light', 'switch', 'input_boolean', 'fan', 'automation', 'humidifier', 'siren', 'binary_sensor'].includes(e.domain)) return st === 'on';
+  if (e.domain === 'cover') return st === 'open' || st === 'opening';
+  if (e.domain === 'lock') return st === 'unlocked' || st === 'open';
+  if (e.domain === 'media_player') return st === 'playing';
+  if (e.domain === 'climate') return st !== 'off' && st !== 'unavailable';
+  if (e.domain === 'person' || e.domain === 'device_tracker') return st === 'home';
+  if (e.domain === 'vacuum') return st === 'cleaning';
+  return false;
+}
+function haState(e) {
+  const st = e.state;
+  if (st === 'missing') return 'Introuvable';
+  if (st === 'unavailable') return 'Indisponible';
+  if (st === 'unknown') return '—';
+  const onOff = (a, b) => (st === 'on' ? a : st === 'off' ? b : st);
+  switch (e.domain) {
+    case 'light': return st === 'on' ? (e.brightness != null ? `Allumée · ${e.brightness} %` : 'Allumée') : 'Éteinte';
+    case 'switch': case 'input_boolean': case 'fan': case 'humidifier': case 'siren': return onOff('Marche', 'Arrêt');
+    case 'automation': return onOff('Activée', 'Désactivée');
+    case 'binary_sensor': {
+      const L = { door: ['Ouverte', 'Fermée'], garage_door: ['Ouverte', 'Fermée'], window: ['Ouverte', 'Fermée'], opening: ['Ouvert', 'Fermé'],
+        motion: ['Mouvement', 'Calme'], occupancy: ['Occupé', 'Libre'], presence: ['Présent', 'Absent'], moisture: ['Humide', 'Sec'],
+        battery: ['Faible', 'Normale'], connectivity: ['Connecté', 'Déconnecté'], plug: ['Branché', 'Débranché'], power: ['Sous tension', 'Hors tension'],
+        smoke: ['Fumée !', 'RAS'], gas: ['Gaz !', 'RAS'], problem: ['Problème', 'OK'], lock: ['Déverrouillé', 'Verrouillé'] }[e.deviceClass] || ['Actif', 'Inactif'];
+      return onOff(L[0], L[1]);
+    }
+    case 'lock': return { locked: 'Verrouillée', unlocked: 'Déverrouillée', locking: 'Verrouillage…', unlocking: 'Déverrouillage…', jammed: 'Bloquée', open: 'Ouverte' }[st] || st;
+    case 'cover': return ({ open: 'Ouvert', closed: 'Fermé', opening: 'Ouverture…', closing: 'Fermeture…' }[st] || st) + (e.position != null && e.position > 0 && e.position < 100 ? ` · ${e.position} %` : '');
+    case 'climate': return { off: 'Arrêt', heat: 'Chauffage', cool: 'Climatisation', heat_cool: 'Auto', auto: 'Auto', dry: 'Déshumidification', fan_only: 'Ventilation' }[st] || st;
+    case 'media_player': return ({ playing: 'Lecture', paused: 'Pause', idle: 'Inactif', off: 'Éteint', on: 'Allumé', standby: 'Veille' }[st] || st) + (e.media && (st === 'playing' || st === 'paused') ? ` · ${e.media}` : '');
+    case 'person': case 'device_tracker': return st === 'home' ? 'À la maison' : st === 'not_home' ? 'Absent' : st;
+    case 'vacuum': return { cleaning: 'Nettoyage', docked: 'À la base', returning: 'Retour à la base', idle: 'Inactif', paused: 'Pause', error: 'Erreur' }[st] || st;
+    case 'scene': return 'Scène';
+    case 'script': return st === 'on' ? 'En cours…' : 'Script';
+    case 'button': case 'input_button': return 'Bouton';
+    case 'sun': return st === 'above_horizon' ? 'Levé' : 'Couché';
+  }
+  if (e.deviceClass === 'timestamp' && Date.parse(st)) return relTime(new Date(st).toISOString());
+  const n = Number(st);
+  if (st !== '' && !isNaN(n)) return `${n.toLocaleString('fr-FR', { maximumFractionDigits: Math.abs(n) >= 100 ? 0 : 1 })}${e.unit ? (e.unit === '%' ? ' %' : ' ' + e.unit) : ''}`;
+  return st + (e.unit ? ' ' + e.unit : '');
+}
+// action principale (appui sur la tuile) : [service, données, confirmation]
+function haMain(e) {
+  if (['unavailable', 'missing'].includes(e.state)) return null;
+  switch (e.domain) {
+    case 'light': case 'switch': case 'input_boolean': case 'fan': case 'automation': case 'humidifier': return ['toggle'];
+    case 'siren': return [e.state === 'on' ? 'turn_off' : 'turn_on'];
+    case 'scene': case 'script': return ['turn_on'];
+    case 'button': case 'input_button': return ['press'];
+    case 'lock': return e.state === 'locked' ? ['unlock', null, `Déverrouiller « ${e.name} » ?`] : ['lock'];
+    case 'cover': return e.state === 'open' || e.state === 'opening' ? ['close_cover'] : ['open_cover'];
+    case 'media_player': return ['media_play_pause'];
+    case 'vacuum': return e.state === 'cleaning' ? ['return_to_base'] : ['start'];
+  }
+  return null;
+}
+// fenêtre de choix des entités : renvoie [{ id, name }] ou null (annulé)
+function pickHaEntities(intId, selected) {
+  return new Promise(resolve => {
+    let done = false, all = [], dom = '';
+    const sel = new Set(selected);
+    const m = modal({
+      title: 'Entités Home Assistant', wide: true,
+      body: `<div class="hap"><input class="input" type="search" placeholder="Rechercher (nom ou identifiant : salon, prise, température…)" data-hapq>
+        <div class="hap-dom" data-hapd></div><div class="hap-list" data-hapl><div class="muted small" style="padding:12px">Chargement des entités…</div></div></div>`,
+      footer: '<span class="muted small" data-hapn style="margin-right:auto"></span><button class="btn" data-hapx>Annuler</button><button class="btn primary" data-hapok>Valider</button>'
+    });
+    const finish = v => { if (done) return; done = true; m.close(); resolve(v); };
+    const list = $('[data-hapl]', m.el), q = $('[data-hapq]', m.el);
+    const count = () => { $('[data-hapn]', m.el).textContent = `${sel.size} entité(s) sélectionnée(s)`; };
+    const draw = () => {
+      const t = q.value.trim().toLowerCase();
+      const rows = all.filter(x => (!dom || x.domain === dom || (dom === '_sel' && sel.has(x.id))) && (!t || `${x.name} ${x.id}`.toLowerCase().includes(t)));
+      list.innerHTML = rows.slice(0, 400).map(x => `
+        <label class="hap-row ${sel.has(x.id) ? 'on' : ''}"><input type="checkbox" data-hapi="${esc(x.id)}" ${sel.has(x.id) ? 'checked' : ''}>
+          ${symHtml(haIcon(x))}<span class="hap-n"><b>${esc(x.name)}</b><small class="mono">${esc(x.id)}</small></span>
+          <span class="hap-s muted small">${esc(haState(x))}</span></label>`).join('')
+        + (rows.length > 400 ? `<div class="muted small" style="padding:8px">${rows.length - 400} autres : affine la recherche.</div>` : '')
+        || '<div class="muted small" style="padding:12px">Aucune entité trouvée.</div>';
+      count();
+    };
+    api(`/integrations/${intId}/list`).then(r => {
+      all = r;
+      const counts = {};
+      all.forEach(x => { counts[x.domain] = (counts[x.domain] || 0) + 1; });
+      const doms = Object.keys(counts).sort((a, b) => (HA_DOM[a] ? 0 : 1) - (HA_DOM[b] ? 0 : 1) || counts[b] - counts[a]);
+      $('[data-hapd]', m.el).innerHTML = `<button type="button" class="btn sm on" data-hapdom="">Tout (${all.length})</button><button type="button" class="btn sm" data-hapdom="_sel">Sélection</button>`
+        + doms.map(d => `<button type="button" class="btn sm" data-hapdom="${esc(d)}">${esc(HA_DOM[d] || d)} (${counts[d]})</button>`).join('');
+      draw();
+    }).catch(err => { list.innerHTML = `<div class="w-err" style="padding:12px">${esc(err.message)}</div>`; });
+    q.addEventListener('input', draw);
+    m.el.addEventListener('change', e => {
+      const c = e.target.closest('[data-hapi]'); if (!c) return;
+      c.checked ? sel.add(c.dataset.hapi) : sel.delete(c.dataset.hapi);
+      c.closest('.hap-row').classList.toggle('on', c.checked); count();
+    });
+    m.el.addEventListener('click', e => {
+      const d = e.target.closest('[data-hapdom]');
+      if (d) { dom = d.dataset.hapdom; $$('[data-hapdom]', m.el).forEach(b => b.classList.toggle('on', b === d)); return draw(); }
+      if (e.target.closest('[data-hapx]')) return finish(null);
+      if (e.target.closest('[data-hapok]')) {
+        // garde l'ordre existant, puis ajoute les nouvelles dans l'ordre de la liste
+        const order = [...selected.filter(id => sel.has(id)), ...all.filter(x => sel.has(x.id) && !selected.includes(x.id)).map(x => x.id)];
+        return finish(order.map(id => { const x = all.find(y => y.id === id) || {}; return { id, name: x.name || id, dc: x.deviceClass || '' }; }));
+      }
+    });
+    const obs = new MutationObserver(() => { if (!m.el.isConnected) { obs.disconnect(); finish(null); } });
+    obs.observe(document.body, { childList: true, subtree: true });
+    setTimeout(() => q.focus(), 50);
+  });
+}
 
 // ---------- cours : échelle du graphique et format des montants ----------
 function stkScale(pts, base) {
@@ -2157,6 +2324,92 @@ const RENDER = {
           </a>`).join('')}</div></div>`;
     }
   },
+  search: {
+    static: w => {
+      const cfg = w.config || {};
+      const cur = srchEngine(w);
+      const list = srchEngines(cfg);
+      const eng = cfg.switcher !== false && list.length > 1
+        ? `<details class="srch-eng"><summary title="Moteur : ${esc(cur)} (cliquer pour changer)">${srchIcon(cur)}</summary><div class="srch-menu">${list.map(e => `<button type="button" class="srch-mi ${e === cur ? 'on' : ''}" data-eng="${esc(e)}">${srchIcon(e)}<span>${esc(e)}</span></button>`).join('')}</div></details>`
+        : `<span class="srch-eng srch-eng1" title="${esc(cur)}">${srchIcon(cur)}</span>`;
+      return `<form class="srch" data-srch autocomplete="off" role="search">
+        ${eng}<input type="search" name="q" placeholder="${esc(cfg.placeholder || `Rechercher avec ${cur}…`)}" enterkeyhint="search" spellcheck="false" aria-label="Rechercher">
+        <button class="srch-go" title="Rechercher">${symHtml('lucide:search')}</button>
+        <div class="srch-sug" hidden></div></form>`;
+    },
+    bind(w, el, rebind) {
+      const cfg = w.config || {};
+      const f = $('[data-srch]', el), inp = f.q, box = $('.srch-sug', f);
+      let items = [], sel = -1, timer, seq = 0;
+      const close = () => { box.hidden = true; sel = -1; };
+      const go = url => { close(); if (S.dash?.settings?.linkTarget === 'same') location.href = url; else window.open(url, '_blank', 'noopener'); };
+      const search = q => { const u = srchUrl(w, q); if (u) { go(u); inp.value = ''; } else toast('Adresse du moteur de recherche à configurer (⚙ du widget)', true); };
+      const draw = () => {
+        box.innerHTML = items.map((x, i) => `<button type="button" class="srch-it ${i === sel ? 'on' : ''}" data-i="${i}">${x.html}</button>`).join('');
+        box.hidden = !items.length;
+      };
+      const refresh = async () => {
+        const q = inp.value.trim(), my = ++seq;
+        if (!q) { items = []; return close(); }
+        const out = [];
+        if (/^(https?:\/\/)?[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/i.test(q) && !/\s/.test(q)) {
+          const url = /^https?:\/\//i.test(q) ? q : 'https://' + q;
+          out.push({ go: url, html: `${symHtml('lucide:globe')}<span>Aller sur <b>${esc(q)}</b></span>` });
+        }
+        if (cfg.bookmarks !== false) {
+          const ql = q.toLowerCase();
+          srchLinks().filter(l => `${l.name} ${l.desc || ''} ${l.url}`.toLowerCase().includes(ql)).slice(0, 4)
+            .forEach(l => out.push({ go: l.url, html: `<span class="srch-bm">${iconHtml(l.icon, l.name, l.url)}</span><span>${esc(l.name)}<small>${esc(l.url.replace(/^https?:\/\//, ''))}</small></span><em>favori</em>` }));
+        }
+        items = out; sel = -1; draw();
+        if (cfg.suggest === false) return;
+        try {
+          const sug = await api(`/search/suggest?p=${encodeURIComponent(pageOf(w))}&w=${encodeURIComponent(w.id)}&e=${encodeURIComponent(srchEngine(w))}&q=${encodeURIComponent(q)}`);
+          if (my !== seq) return; // une autre frappe a eu lieu entre-temps
+          items = [...out, ...sug.filter(x => x.toLowerCase() !== q.toLowerCase()).slice(0, 7).map(x => ({ q: x, html: `${symHtml('lucide:search')}<span>${esc(x)}</span>` }))];
+          draw();
+        } catch { /* suggestions indisponibles */ }
+      };
+      inp.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(refresh, 140); });
+      inp.addEventListener('focus', () => { if (items.length) draw(); });
+      inp.addEventListener('keydown', e => {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          if (!items.length) return;
+          e.preventDefault();
+          // -1 = le texte saisi ; on boucle de la dernière ligne vers le champ
+          sel = e.key === 'ArrowDown' ? (sel + 1 >= items.length ? -1 : sel + 1) : (sel - 1 < -1 ? items.length - 1 : sel - 1);
+          draw();
+        } else if (e.key === 'Escape') { close(); inp.blur(); }
+      });
+      f.addEventListener('submit', e => {
+        e.preventDefault();
+        const it = items[sel];
+        if (it) return it.go ? go(it.go) : search(it.q);
+        const q = inp.value.trim();
+        if (q) search(q);
+      });
+      box.addEventListener('mousedown', e => e.preventDefault()); // garde le focus dans le champ
+      box.addEventListener('click', e => { const b = e.target.closest('[data-i]'); if (!b) return; const it = items[+b.dataset.i]; it.go ? go(it.go) : search(it.q); });
+      inp.addEventListener('blur', () => setTimeout(close, 120));
+      // changement de moteur (mémorisé sur cet appareil)
+      if (!rebind) el.addEventListener('click', e => {
+        const b = e.target.closest('[data-eng]'); if (!b) return;
+        localStorageSet('hd_eng_' + w.id, b.dataset.eng);
+        const st = $('.w-static', el); if (st) st.innerHTML = RENDER.search.static(w);
+        RENDER.search.bind(w, el, true);
+        $('[data-srch] input', el)?.focus();
+      });
+      if (cfg.slash !== false && !SRCH_SLASH) {
+        SRCH_SLASH = true;
+        document.addEventListener('keydown', e => {
+          if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || document.activeElement?.isContentEditable || $('.modal')) return;
+          const i = $('[data-srch] input'); if (!i) return;
+          e.preventDefault(); i.focus();
+        });
+      }
+    }
+  },
+
   title: {
     static: w => {
       const c = { size: 'Moyenne', align: 'Gauche', line: true, ...(w.config || {}) };
@@ -2237,6 +2490,338 @@ const RENDER = {
         if (!canEdit()) { cb.checked = !cb.checked; return; }
         await save(toggleTask(w.config?.content || '', Number(cb.dataset.line)));
       });
+    }
+  },
+
+  backups: {
+    bind(w, el) {
+      el.addEventListener('click', async e => {
+        const b = e.target.closest('[data-bkrun]');
+        if (!b) return;
+        if (!confirm(`Lancer maintenant la sauvegarde « ${b.dataset.bkrun} » ?`)) return;
+        b.disabled = true;
+        try {
+          await api(`/widgets/${pageOf(w)}/${w.id}/action`, { method: 'POST', body: { integrationId: b.dataset.int, op: 'run', plan: b.dataset.bkrun } });
+          toast(`Sauvegarde « ${b.dataset.bkrun} » lancée ✓`);
+        } catch (err) { toast(err.message, true); }
+        delete S.cache[w.id];
+        setTimeout(() => loadWidget(w), 1500);
+      });
+    },
+    dyn(d, w) {
+      const cfg = w.config || {};
+      const items = d.items || [];
+      if (!items.length) return '<div class="empty">Aucune sauvegarde trouvée</div>';
+      const now = Date.now(), maxAge = Math.max(1, Number(cfg.maxAge) || 26) * 3600e3;
+      const ago = t => { const m = Math.round((now - t) / 60e3); return m < 1 ? 'à l\'instant' : m < 60 ? `il y a ${m} min` : m < 2880 ? `il y a ${Math.round(m / 60)} h` : `il y a ${Math.round(m / 1440)} j`; };
+      const inT = t => { const m = Math.round((t - now) / 60e3); return m <= 0 ? 'imminente' : m < 60 ? `dans ${m} min` : m < 2880 ? `dans ${Math.round(m / 60)} h` : `dans ${Math.round(m / 1440)} j`; };
+      // état affiché : en cours > échec > retard > avertissement > ok
+      const state = x => (x.status === 'running' ? 'running' : x.status === 'error' ? 'error' : !x.lastOk ? (x.status === 'unknown' ? 'unknown' : 'late') : now - x.lastOk > maxAge ? 'late' : x.status === 'warn' ? 'warn' : 'ok');
+      const ICON = { ok: 'circle-check', warn: 'triangle-alert', error: 'circle-x', late: 'clock-alert', running: 'loader-circle', unknown: 'circle-dot' };
+      const LBL = { ok: 'à jour', warn: 'avertissement', error: 'échec', late: 'en retard', running: 'en cours', unknown: 'inconnu' };
+      const rows = items.map(x => ({ x, s: state(x) })).sort((a, b) => ['error', 'late', 'running', 'warn', 'unknown', 'ok'].indexOf(a.s) - ['error', 'late', 'running', 'warn', 'unknown', 'ok'].indexOf(b.s) || a.x.name.localeCompare(b.x.name));
+      const cnt = k => rows.filter(r => r.s === k).length;
+      const compact = cfg.layout === 'Compacte';
+      const row = ({ x, s }) => {
+        const hist = compact ? '' : `<span class="bk-hist" title="Dernières sauvegardes">${(x.recent || []).slice(-14).map(r => `<i class="${r.status}" title="${new Date(r.t).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · ${LBL[r.status] || r.status}${r.bytes ? ` · +${fmtBytes(r.bytes)}` : ''}${r.ms ? ` · ${Math.max(1, Math.round(r.ms / 1000))} s` : ''}"></i>`).join('')}</span>`;
+        const lastTxt = x.last ? `${x.approx ? '≈ ' : ''}${ago(x.last)}` : x.approx && x.snapshots ? 'avant le suivi' : 'jamais';
+        const sub = s === 'running' ? 'sauvegarde en cours…' : x.next ? `prochaine ${inT(x.next)}` : x.lastOk && s === 'error' ? `dernière réussie ${ago(x.lastOk)}` : '';
+        return `<div class="bk-row ${s}" title="${esc(x.source)}${x.instance && x.instance !== x.source ? ' · ' + esc(x.instance) : ''}${x.repoUri ? ' · ' + esc(x.repoUri) : ''}${x.counts ? ` · 30 j : ${x.counts.ok} réussies, ${x.counts.warn} avertissements, ${x.counts.error} échecs` : ''}${x.approx ? ' · heure déduite de l\'apparition du snapshot' : ''}">
+          <span class="bk-ic">${symHtml('lucide:' + ICON[s])}</span>
+          <span class="bk-n"><b>${esc(x.name)}</b><small>${esc(x.source)}${x.repo && x.repo !== x.name ? ' · ' + esc(x.repo) : ''}${x.error ? ` · <span class="up-err">${esc(x.error)}</span>` : ''}</small></span>
+          <span class="bk-last"><b>${lastTxt}</b><small class="${s === 'late' ? 'bk-latec' : ''}">${s === 'late' ? LBL.late : esc(sub)}</small></span>
+          ${hist}
+          ${compact ? '' : `<span class="bk-size"><b>${x.size != null ? fmtBytes(x.size) : '—'}</b><small>${x.snapshots != null ? `${x.snapshots} snapshots` : ''}</small></span>`}
+          ${canEdit() && x.canRun ? `<button class="iconbtn bk-run" data-bkrun="${esc(x.id)}" data-int="${x.integrationId}" title="Lancer maintenant" ${s === 'running' ? 'disabled' : ''}>${symHtml('lucide:play')}</button>` : (canEdit() && items.some(i => i.canRun) ? '<span class="bk-run"></span>' : '')}
+        </div>`;
+      };
+      const bad = cnt('error') + cnt('late');
+      return `<div class="up-sum"><span class="up-big ${bad ? 'ko' : 'ok'}">${symHtml(bad ? 'lucide:circle-alert' : 'lucide:circle-check')} ${cnt('ok') + cnt('warn')}/${items.length} à jour</span>
+          ${cnt('error') ? `<span class="up-err">${cnt('error')} en échec</span>` : ''}${cnt('late') ? `<span class="bk-latec">${cnt('late')} en retard</span>` : ''}${cnt('running') ? `<span style="color:var(--accent)">${cnt('running')} en cours</span>` : ''}
+          <span class="muted small up-avg">${fmtBytes(items.reduce((a, x) => a + (x.size || 0), 0))} protégés</span></div>
+        <div class="bk-list ${compact ? 'cmp' : ''}">${rows.map(row).join('')}</div>`;
+    }
+  },
+
+  proxy: {
+    bind(w, el) {
+      el.addEventListener('input', e => {
+        const q = e.target.closest('[data-pxq]'); if (!q) return;
+        (S.pxq ||= {})[w.id] = q.value.toLowerCase();
+        $$('.px-row', el).forEach(r => { r.hidden = !!S.pxq[w.id] && !r.dataset.s.includes(S.pxq[w.id]); });
+      });
+      el.addEventListener('click', async e => {
+        const b = e.target.closest('[data-pxt]');
+        if (!b) return;
+        e.preventDefault();
+        const on = b.dataset.on !== '1';
+        if (!on && !confirm(`Désactiver l'hôte « ${b.dataset.dom} » ? Le site ne sera plus accessible par ce domaine.`)) return;
+        b.classList.add('busy');
+        try {
+          await api(`/widgets/${pageOf(w)}/${w.id}/action`, { method: 'POST', body: { integrationId: b.dataset.int, op: 'host', hostId: b.dataset.pxt, enabled: on } });
+          toast(`${b.dataset.dom} : ${on ? 'activé' : 'désactivé'} ✓`);
+        } catch (err) { toast(err.message, true); }
+        for (const x of (page()?.widgets || []).filter(x => x.type === 'proxy')) { delete S.cache[x.id]; loadWidget(x); }
+      });
+    },
+    dyn(d, w) {
+      const cfg = w.config || {};
+      const sv = d.servers || [];
+      if (!sv.length) return '<div class="empty">Nginx Proxy Manager injoignable</div>';
+      const warn = Math.max(1, Number(cfg.certDays) || 21);
+      const rows = cfg.rows === 0 || cfg.rows === '0' ? 0 : Math.max(2, Math.min(50, Number(cfg.rows) || 8));
+      const now = Date.now();
+      const days = t => Math.floor((t - now) / 864e5);
+      const hosts = sv.flatMap(x => x.hosts);
+      const certs = sv.flatMap(x => x.certs || []);
+      const cnt = k => sv.reduce((a, x) => a + (x.counts?.[k] || 0), 0);
+      const issue = h => !h.enabled || !h.online || (h.certExp && days(h.certExp) <= warn) || !h.ssl;
+      const rank = h => (!h.online && h.enabled ? 0 : h.certExp && days(h.certExp) <= warn ? 1 : !h.enabled ? 2 : !h.ssl ? 3 : 4);
+      const off = hosts.filter(h => !h.enabled).length, err = hosts.filter(h => h.enabled && !h.online).length;
+      const soon = certs.filter(c => c.exp && days(c.exp) <= warn).sort((a, b) => a.exp - b.exp);
+      const expired = soon.filter(c => days(c.exp) < 0).length;
+      const ed = canEdit();
+      const row = h => {
+        const dom = h.domains[0] || '?';
+        const st = !h.enabled ? 'off' : !h.online ? 'ko' : 'ok';
+        const cd = h.certExp ? days(h.certExp) : null;
+        const badges = [
+          h.ssl ? `<span class="px-b ${cd != null && cd <= warn ? (cd <= 7 ? 'ko' : 'warn') : 'ok'}" title="${esc(h.certName || 'Certificat SSL')}${h.certExp ? ' · expire le ' + new Date(h.certExp).toLocaleDateString('fr-FR') : ''}">${symHtml('lucide:lock')}${cd != null && cd <= warn ? (cd < 0 ? 'expiré' : `${cd} j`) : 'SSL'}</span>` : '<span class="px-b warn" title="Pas de certificat : accès en HTTP uniquement">HTTP</span>',
+          h.access ? `<span class="px-b" title="Liste d'accès : ${esc(h.access)}">${symHtml('lucide:key-round')}</span>` : '',
+          h.domains.length > 1 ? `<span class="px-b" title="${esc(h.domains.join(', '))}">+${h.domains.length - 1}</span>` : ''
+        ].join('');
+        return `<div class="px-row ${st}" data-s="${esc((h.domains.join(' ') + ' ' + h.target).toLowerCase())}" ${S.pxq?.[w.id] && !(h.domains.join(' ') + ' ' + h.target).toLowerCase().includes(S.pxq[w.id]) ? 'hidden' : ''}>
+          <span class="up-dot"></span>
+          <span class="px-n"><a href="${h.ssl ? 'https' : 'http'}://${esc(dom)}" target="_blank" rel="noopener"><b>${esc(dom)}</b></a>${badges}
+            <small>→ ${esc(h.target)}${!h.online && h.enabled ? ` · <span class="up-err" title="${esc(h.error)}">erreur nginx${h.error ? ' : ' + esc(h.error.slice(0, 80)) : ''}</span>` : ''}${!h.enabled ? ' · désactivé' : ''}</small></span>
+          ${ed ? `<button class="hae-sw px-sw ${h.enabled ? 'on' : ''}" data-pxt="${h.id}" data-int="${h.integrationId}" data-on="${h.enabled ? 1 : 0}" data-dom="${esc(dom)}" title="${h.enabled ? 'Désactiver' : 'Activer'} cet hôte"><i></i></button>` : ''}
+        </div>`;
+      };
+      const head = `<div class="px-sum">
+          <div><b>${hosts.length}</b><span>hôtes proxy</span></div>
+          <div><b>${hosts.length - off - err}</b><span>actifs</span></div>
+          ${off ? `<div><b class="muted">${off}</b><span>désactivés</span></div>` : ''}
+          ${err ? `<div><b class="dns-red">${err}</b><span>en erreur</span></div>` : ''}
+          <div><b>${cnt('redirect')}</b><span>redirections</span></div>
+          <div><b>${cnt('streams')}</b><span>flux</span></div>
+          <div><b class="${expired ? 'dns-red' : soon.length ? 'px-warn' : ''}">${certs.length}</b><span>certificats</span></div>
+        </div>
+        ${soon.length ? `<div class="px-alert ${expired || days(soon[0].exp) <= 7 ? 'ko' : ''}">${symHtml('lucide:lock')} ${soon.slice(0, 3).map(c => `<b>${esc(c.name)}</b> ${days(c.exp) < 0 ? 'a expiré' : `expire dans ${days(c.exp)} j`}`).join(' · ')}${soon.length > 3 ? ` · +${soon.length - 3}` : ''}</div>` : ''}`;
+      let list = [...hosts].sort((a, b) => rank(a) - rank(b) || (a.domains[0] || '').localeCompare(b.domains[0] || ''));
+      if (cfg.layout === 'Compacte') {
+        list = list.filter(issue);
+        return `${head}${list.length ? `<div class="px-list ${rows ? 'px-scroll' : ''}" style="${rows ? `--rows:${rows}` : ''}">${list.map(row).join('')}</div>` : `<div class="px-okall">${symHtml('lucide:circle-check')} Tous les hôtes sont actifs, en HTTPS, sans certificat proche de l'expiration</div>`}`;
+      }
+      if (cfg.show === 'Problèmes uniquement') list = list.filter(issue);
+      return `${head}${hosts.length > 8 ? `<input class="input px-q" data-pxq type="search" placeholder="Filtrer (domaine, cible)…" value="${esc(S.pxq?.[w.id] || '')}">` : ''}
+        <div class="px-list ${rows ? 'px-scroll' : ''}" style="${rows ? `--rows:${rows}` : ''}">${list.map(row).join('') || '<div class="empty small">Aucun hôte à signaler</div>'}</div>`;
+    }
+  },
+
+  uptime: {
+    dyn(d, w) {
+      const cfg = w.config || {};
+      let ts = d.targets || [];
+      if (!ts.length) return `<div class="empty">Aucun service surveillé.${canEdit() ? ' Ajoute-les dans les réglages du widget (⚙ en mode Modifier).' : ''}</div>`;
+      if (cfg.downFirst !== false) ts = [...ts].sort((a, b) => (a.up === false ? 0 : 1) - (b.up === false ? 0 : 1));
+      const pct = v => (v == null ? '—' : `${v >= 99.995 ? '100' : v.toLocaleString('fr-FR', { maximumFractionDigits: v >= 99 ? 2 : 1 })} %`);
+      const dur = ms => { const m = Math.max(1, Math.round(ms / 60e3)); return m < 60 ? `${m} min` : m < 2880 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} j`; };
+      const down = ts.filter(t => t.up === false).length, on = ts.filter(t => t.up).length;
+      const u24 = ts.filter(t => t.uptime24 != null);
+      const avg = u24.length ? u24.reduce((a, t) => a + t.uptime24, 0) / u24.length : null;
+      const compact = cfg.layout === 'Compacte';
+      const nb = ts[0]?.buckets?.length || 48, size = 864e5 / nb, t0 = Date.now() - 864e5;
+      const hm = t => new Date(t).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+      const row = t => {
+        const st = t.up == null ? 'na' : !t.up ? 'ko' : t.ms > d.slowMs ? 'slow' : 'ok';
+        const addr = t.kind === 'tcp' ? t.url : t.url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+        const since = t.since ? (t.up ? `en ligne depuis ${dur(Date.now() - t.since)}` : `<span class="up-err">hors ligne depuis ${dur(Date.now() - t.since)}${t.error ? ` · ${esc(t.error)}` : ''}</span>`) : 'première vérification…';
+        const cert = t.cert && t.cert.days <= 21 ? `<span class="up-cert ${t.cert.days <= 7 ? 'ko' : ''}" title="Certificat HTTPS${t.cert.issuer ? ' (' + esc(t.cert.issuer) + ')' : ''}">${symHtml('lucide:lock')} ${t.cert.days < 0 ? 'expiré' : `expire dans ${t.cert.days} j`}</span>` : '';
+        const tip = `${esc(t.name)} · 24 h : ${pct(t.uptime24)} · 7 j : ${pct(t.uptime7)} · 30 j : ${pct(t.uptime30)}${t.avgMs != null ? ` · moyenne ${t.avgMs} ms` : ''}${t.checked ? ` · vérifié à ${hm(t.checked)}` : ''}`;
+        const bar = compact ? '' : `<span class="up-bar">${t.buckets.map((b, i) => `<i class="${b == null ? 'na' : b[0] === 100 ? (b[1] > d.slowMs ? 'slow' : 'ok') : b[0] === 0 ? 'ko' : 'part'}" title="${hm(t0 + i * size)}–${hm(t0 + (i + 1) * size)} : ${b ? `${b[0]} % en ligne${b[1] != null ? ` · ${b[1]} ms` : ''}` : 'pas de mesure'}"></i>`).join('')}</span>`;
+        const tag = t.kind === 'http' ? 'a' : 'div';
+        return `<${tag} class="up-row ${st}" ${tag === 'a' ? `href="${esc(t.url)}" target="_blank" rel="noopener"` : ''} title="${tip}">
+          <span class="up-dot"></span>
+          <span class="up-n"><b>${esc(t.name)}</b>${cert}<small>${compact ? esc(addr) : `${esc(addr)} · ${since}`}</small></span>
+          ${bar}
+          <span class="up-pct" title="Disponibilité sur 24 h">${pct(t.uptime24)}</span>
+          <span class="up-ms">${t.up && t.ms >= 0 ? `${t.ms} ms` : t.up === false ? 'panne' : '—'}</span>
+        </${tag}>`;
+      };
+      return `<div class="up-sum"><span class="up-big ${down ? 'ko' : 'ok'}">${symHtml(down ? 'lucide:circle-alert' : 'lucide:circle-check')} ${on}/${ts.length} en ligne</span>
+          ${down ? `<span class="up-err">${down} en panne</span>` : ''}<span class="muted small up-avg">disponibilité 24 h : <b>${pct(avg)}</b></span></div>
+        <div class="up-list ${compact ? 'cmp' : ''}">${ts.map(row).join('')}</div>`;
+    }
+  },
+
+  ha: {
+    bind(w, el) {
+      const run = async (id, service, data, ask) => {
+        if (ask && !confirm(ask)) return;
+        const tile = $(`[data-hx="${CSS.escape(id)}"]`, el);
+        tile?.classList.add('busy');
+        try {
+          await api(`/widgets/${pageOf(w)}/${w.id}/action`, { method: 'POST', body: { op: 'service', entity: id, service, data } });
+        } catch (err) { toast(err.message, true); }
+        // tous les widgets Home Assistant de la page reflètent le nouvel état
+        setTimeout(() => { for (const x of (page()?.widgets || []).filter(x => x.type === 'ha')) { delete S.cache[x.id]; loadWidget(x); } }, 450);
+      };
+      el.addEventListener('click', e => {
+        if (!canEdit() || e.target.closest('input[type=range]')) return;
+        const b = e.target.closest('[data-hsv]');
+        const box = e.target.closest('[data-hx]');
+        if (!box) return;
+        const ent = (S.cache[w.id]?.entities || []).find(x => x.id === box.dataset.hx);
+        if (!ent) return;
+        if (b) {
+          e.stopPropagation();
+          const [sv, arg] = b.dataset.hsv.split(':');
+          if (sv === 'set_temperature') {
+            const t = Math.round(((ent.target ?? ent.current ?? 20) + Number(arg) * (ent.step || 0.5)) * 10) / 10;
+            const lim = Math.min(ent.max ?? 35, Math.max(ent.min ?? 5, t));
+            $('.hae-tgt', box) && ($('.hae-tgt', box).textContent = lim.toLocaleString('fr-FR') + '°');
+            clearTimeout(box._t); ent.target = lim;
+            box._t = setTimeout(() => run(ent.id, 'set_temperature', { temperature: lim }), 700); // regroupe les appuis successifs
+            return;
+          }
+          return run(ent.id, sv);
+        }
+        const act = haMain(ent);
+        if (act) run(ent.id, act[0], act[1], act[2]);
+      });
+      el.addEventListener('change', e => {
+        const r = e.target.closest('[data-hbri]');
+        if (r) run(r.dataset.hbri, 'turn_on', { brightness_pct: Number(r.value) });
+      });
+      el.addEventListener('input', e => {
+        const r = e.target.closest('[data-hbri]');
+        if (r) { const s = $('.hae-s', r.closest('[data-hx]')); if (s) s.textContent = `Allumée · ${r.value} %`; }
+      });
+    },
+    dyn(d, w) {
+      const cfg = w.config || {};
+      const ents = d.entities || [];
+      if (!ents.length) return `<div class="empty">Aucune entité.${canEdit() ? ' Ajoute-les dans les réglages du widget (⚙ en mode Modifier).' : ''}</div>`;
+      const list = (cfg.layout || 'Tuiles') === 'Liste';
+      const ed = canEdit();
+      const one = e => {
+        const on = haOn(e), main = ed && haMain(e);
+        const dead = ['unavailable', 'missing'].includes(e.state);
+        const col = e.domain === 'light' && on && e.rgb ? `--hc:rgb(${e.rgb.join(',')})` : '';
+        const isVal = ['sensor', 'input_number', 'number'].includes(e.domain);
+        const bri = ed && e.domain === 'light' && on && e.dimmable ? `<input type="range" class="hae-bri" min="1" max="100" value="${e.brightness ?? 100}" data-hbri="${esc(e.id)}" title="Luminosité">` : '';
+        const clim = (e.domain === 'climate' || e.domain === 'water_heater') ? `<span class="hae-clim">${list && e.current != null ? `<span class="muted small">${e.current.toLocaleString('fr-FR')}° →</span>` : ''}
+          ${ed ? '<button class="iconbtn" data-hsv="set_temperature:-1" title="Baisser">−</button>' : ''}<b class="hae-tgt">${e.target != null ? e.target.toLocaleString('fr-FR') + '°' : '—'}</b>${ed ? '<button class="iconbtn" data-hsv="set_temperature:1" title="Monter">+</button>' : ''}</span>` : '';
+        const cover = ed && e.domain === 'cover' && list ? `<span class="hae-btns"><button class="iconbtn" data-hsv="open_cover" title="Ouvrir">▲</button><button class="iconbtn" data-hsv="stop_cover" title="Stop">■</button><button class="iconbtn" data-hsv="close_cover" title="Fermer">▼</button></span>` : '';
+        const ctl = list && main && !cover ? (['toggle'].includes(main[0]) ? `<span class="hae-sw ${on ? 'on' : ''}"><i></i></span>`
+          : `<span class="btn sm hae-go">${{ turn_on: e.domain === 'scene' ? 'Activer' : 'Lancer', press: 'Appuyer', unlock: 'Déverrouiller', lock: 'Verrouiller', open_cover: 'Ouvrir', close_cover: 'Fermer', media_play_pause: on ? 'Pause' : 'Lecture', start: 'Démarrer', return_to_base: 'Retour base', turn_off: 'Arrêter' }[main[0]] || 'OK'}</span>`) : '';
+        const heat = e.domain === 'climate' && e.hvacAction === 'heating';
+        return list ? `
+          <div class="hae-li ${on ? 'on' : ''} ${dead ? 'dead' : ''} ${main ? 'act' : ''} dom-${esc(e.domain)}" data-hx="${esc(e.id)}" style="${col}" title="${esc(e.id)}">
+            <span class="hae-ic ${heat ? 'heat' : ''}">${symHtml(haIcon(e))}</span>
+            <span class="hae-txt"><b class="hae-n">${esc(e.name)}</b>${isVal ? '' : `<span class="hae-s">${esc(haState(e))}</span>`}${bri}</span>
+            ${isVal ? `<b class="hae-val">${esc(haState(e))}</b>` : ''}${clim}${cover}${ctl}
+          </div>` : `
+          <div class="hae-tile ${on ? 'on' : ''} ${dead ? 'dead' : ''} ${main ? 'act' : ''} ${isVal ? 'val' : ''} dom-${esc(e.domain)}" data-hx="${esc(e.id)}" style="${col}" title="${esc(e.id)}${main ? ' · appuyer pour ' + ({ toggle: on ? 'éteindre' : 'allumer' }[main[0]] || 'activer') : ''}">
+            <span class="hae-ic ${heat ? 'heat' : ''}">${symHtml(haIcon(e))}</span>
+            ${isVal ? `<b class="hae-val">${esc(haState(e))}</b>` : ''}
+            <span class="hae-n">${esc(e.name)}</span>
+            ${isVal ? '' : `<span class="hae-s">${esc(haState(e))}${clim && e.current != null ? ` · ${e.current.toLocaleString('fr-FR')}°` : ''}</span>`}${clim}
+            ${bri}
+          </div>`;
+      };
+      return `<div class="${list ? 'hae-lst' : 'hae-grid'}">${ents.map(one).join('')}</div>`;
+    }
+  },
+
+  dns: {
+    bind(w, el) {
+      // compte à rebours de la pause
+      S.timers.push(setInterval(() => {
+        $$('[data-until]', el).forEach(x => {
+          const ms = Number(x.dataset.until) - Date.now();
+          if (ms <= 0) { x.textContent = 'reprise…'; return; }
+          const s = Math.ceil(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+          x.textContent = h ? `${h} h ${String(m).padStart(2, '0')}` : `${m}:${String(s % 60).padStart(2, '0')}`;
+        });
+      }, 1000));
+      el.addEventListener('click', async e => {
+        const b = e.target.closest('[data-prot]');
+        if (!b) return;
+        const [op, dur] = b.dataset.prot.split(':');
+        if (op === 'off' && !confirm('Désactiver la protection d\'AdGuard Home jusqu\'à ce que tu la réactives ?')) return;
+        b.closest('details')?.removeAttribute('open');
+        $$('[data-prot]', el).forEach(x => { x.disabled = true; });
+        try {
+          await api(`/widgets/${pageOf(w)}/${w.id}/action`, { method: 'POST', body: { integrationId: b.dataset.int, op: 'protect', enabled: op === 'on', duration: dur ? Number(dur) : undefined } });
+          toast(op === 'on' ? 'Protection réactivée ✓' : op === 'off' ? 'Protection désactivée' : `Protection en pause ${b.textContent.trim()}`);
+        } catch (err) { toast(err.message, true); }
+        // tous les widgets AdGuard de la page reflètent le nouvel état
+        for (const x of (page()?.widgets || []).filter(x => x.type === 'dns')) { delete S.cache[x.id]; loadWidget(x); }
+      });
+    },
+    dyn(d, w) {
+      const cfg = w.config || {};
+      const sv = d.servers || [];
+      if (!sv.length) return '<div class="empty">AdGuard Home injoignable</div>';
+      const n = v => Number(v || 0).toLocaleString('fr-FR');
+      const q = sv.reduce((a, x) => a + x.queries, 0), bl = sv.reduce((a, x) => a + x.blocked + (x.safe || 0), 0);
+      const avg = sv.reduce((a, x) => a + x.avgMs * x.queries, 0) / Math.max(1, q);
+      const len = Math.max(...sv.map(x => x.series.length), 0);
+      const per = sv[0].units === 'days' ? `${len} jours` : `${len} h`;
+      // séries additionnées (alignées sur la fin)
+      const add = k => Array.from({ length: len }, (_, i) => sv.reduce((a, x) => a + (x[k][x[k].length - len + i] || 0), 0));
+      const qs = add('series'), bs = add('blockedSeries');
+      const max = Math.max(1, ...qs);
+      const chart = cfg.showChart !== false && len > 1 ? `<div class="dns-chart" title="Requêtes (gris) et blocages (rouge) sur ${per}">${qs.map((v, i) => `<span title="${n(v)} requêtes · ${n(bs[i])} bloquées"><i style="height:${(v / max * 100).toFixed(1)}%"><b style="height:${v ? (bs[i] / v * 100).toFixed(1) : 0}%"></b></i></span>`).join('')}</div>
+        <div class="dns-axis muted"><span>il y a ${per}</span><span>maintenant</span></div>` : '';
+      const PAUSES = [['30 s', 30e3], ['1 min', 60e3], ['10 min', 600e3], ['1 h', 3600e3], ['8 h', 8 * 3600e3]];
+      const prot = x => {
+        const st = x.protection
+          ? `<span class="dns-on">${symHtml('lucide:shield-check')} Protection active</span>`
+          : x.pausedUntil ? `<span class="dns-off">${symHtml('lucide:shield-off')} En pause · <span data-until="${x.pausedUntil}"></span></span>`
+          : `<span class="dns-off">${symHtml('lucide:shield-off')} Protection désactivée</span>`;
+        const ctl = !canEdit() ? '' : x.protection
+          ? `<details class="dns-pause"><summary class="btn sm">Pause ▾</summary><div class="dns-menu">${PAUSES.map(([l, ms]) => `<button class="btn sm" data-prot="pause:${ms}" data-int="${x.integrationId}">${l}</button>`).join('')}<button class="btn sm danger" data-prot="off" data-int="${x.integrationId}">Désactiver</button></div></details>`
+          : `<button class="btn sm primary" data-prot="on" data-int="${x.integrationId}">Réactiver</button>`;
+        return `<div class="dns-prot">${sv.length > 1 ? `<b class="dns-srv">${esc(x.name)}</b>` : ''}${st}<span class="dns-ctl">${ctl}</span></div>`;
+      };
+      const kind = cfg.top || 'Domaines bloqués';
+      const key = { 'Domaines bloqués': 'topBlocked', 'Clients': 'topClients', 'Domaines demandés': 'topQueried' }[kind];
+      let list = '';
+      if (key) {
+        const m = new Map();
+        sv.forEach(x => (x[key] || []).forEach(([k, v]) => m.set(k, (m.get(k) || 0) + v)));
+        const rows = [...m].sort((a, b) => b[1] - a[1]).slice(0, Math.max(1, Math.min(20, Number(cfg.topCount) || 5)));
+        const tmax = rows[0]?.[1] || 1;
+        list = rows.length ? `<div class="dns-top"><div class="dns-top-h muted"><span>${esc(kind)}</span><span>${per}</span></div>${rows.map(([k, v]) => `
+          <div class="dns-row ${key === 'topBlocked' ? 'bl' : ''}"><span class="dns-k" title="${esc(k)}">${esc(k)}</span><span class="dns-v">${n(v)}</span><i style="width:${(v / tmax * 100).toFixed(1)}%"></i></div>`).join('')}</div>` : '';
+      }
+      const layout = cfg.layout || 'Complète';
+      const pctTxt = q ? (bl / q * 100).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) : '0';
+      // bouton de pause en icône (présentations Compacte et Mini)
+      const ctlIcon = x => (!canEdit() ? '' : x.protection
+        ? `<details class="dns-pause"><summary class="btn sm icon-sm" title="Mettre en pause">${symHtml('lucide:pause')}</summary><div class="dns-menu">${PAUSES.map(([l, ms]) => `<button class="btn sm" data-prot="pause:${ms}" data-int="${x.integrationId}">${l}</button>`).join('')}<button class="btn sm danger" data-prot="off" data-int="${x.integrationId}">Désactiver</button></div></details>`
+        : `<button class="btn sm primary icon-sm" data-prot="on" data-int="${x.integrationId}" title="Réactiver la protection">${symHtml('lucide:play')}</button>`);
+      const stIcon = x => (x.protection ? `<span class="dns-on" title="Protection active">${symHtml('lucide:shield-check')}</span>`
+        : `<span class="dns-off" title="${x.pausedUntil ? 'En pause' : 'Protection désactivée'}">${symHtml('lucide:shield-off')}${x.pausedUntil ? `<span data-until="${x.pausedUntil}"></span>` : '<span>off</span>'}</span>`);
+      const bars = h => (len > 1 ? `<div class="dns-chart" style="height:${h}px" title="Requêtes (gris) et blocages (rouge) sur ${per}">${qs.map((v, i) => `<span title="${n(v)} requêtes · ${n(bs[i])} bloquées"><i style="height:${(v / max * 100).toFixed(1)}%"><b style="height:${v ? (bs[i] / v * 100).toFixed(1) : 0}%"></b></i></span>`).join('')}</div>` : '');
+      if (layout === 'Mini') return `<div class="dns-mini">${sv.map(x => `<span class="dns-mini-s">${stIcon(x)}${ctlIcon(x)}</span>`).join('')}
+        <span class="dns-mini-t"><b class="dns-red">${n(bl)}</b> bloquées · <b>${pctTxt} %</b><span class="muted"> sur ${n(q)}</span></span></div>`;
+      if (layout === 'Compacte') return `<div class="dns-cmp">
+        <div class="dns-cmp-top">${sv.map(x => `<span class="dns-mini-s">${sv.length > 1 ? `<b class="dns-srv">${esc(x.name)}</b>` : ''}${stIcon(x)}${x.protection ? '<span class="dns-on small">active</span>' : ''}${ctlIcon(x)}</span>`).join('')}
+          <span class="dns-cmp-avg muted small">${avg.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} ms</span></div>
+        <div class="dns-cmp-row">
+          <div class="dns-cmp-n"><div><b>${n(q)}</b><span>requêtes</span></div><div><b class="dns-red">${n(bl)}</b><span>bloquées</span></div><div><b>${pctTxt} %</b><span>bloqué</span></div></div>
+          ${cfg.showChart !== false ? bars(38) : ''}
+        </div></div>`;
+      return `${sv.map(prot).join('')}
+        <div class="dns-sum">
+          <div><b>${n(q)}</b><span>requêtes</span></div>
+          <div><b class="dns-red">${n(bl)}</b><span>bloquées</span></div>
+          <div><b>${q ? (bl / q * 100).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) : 0} %</b><span>bloqué</span></div>
+          <div><b>${avg.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} ms</b><span>réponse</span></div>
+        </div>${chart}${list}`;
     }
   },
 
@@ -2706,6 +3291,15 @@ function optionField(o, val) {
     case 'number': return `<label>${esc(o.label)}<input type="number" step="any" name="opt_${o.key}" value="${esc(v)}"></label>`;
     case 'select': return `<label>${esc(o.label)}<select name="opt_${o.key}">${o.options.map(x => `<option ${x === v ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>`;
     case 'textarea': return `<label>${esc(o.label)}<textarea name="opt_${o.key}">${esc(v)}</textarea></label>`;
+    case 'targets': return `<div class="up-field"><div class="small muted" style="margin-bottom:6px">${esc(o.label)}</div>
+      <input type="hidden" name="opt_${o.key}" value="${esc(JSON.stringify(Array.isArray(v) ? v : []))}">
+      <div class="upf-list" data-uplist></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn sm" data-upadd>＋ Ajouter un service</button><button type="button" class="btn sm" data-upimp>Importer depuis les favoris</button></div>
+      <div class="help">Adresse web (<span class="mono">https://cloud.exemple.fr</span>, <span class="mono">http://192.168.1.10:8096</span>) ou hôte:port pour tester un port TCP (<span class="mono">192.168.1.10:22</span>, <span class="mono">nas.local:445</span>). Une page qui demande une connexion (401, 403) compte comme en ligne ; une erreur 5xx ou une absence de réponse, comme en panne.</div></div>`;
+    case 'haentities': return `<div class="hae-field"><div class="small muted" style="margin-bottom:6px">${esc(o.label)}</div>
+      <input type="hidden" name="opt_${o.key}" value="${esc(JSON.stringify(Array.isArray(v) ? v : []))}">
+      <div class="hae-list" data-haelist></div>
+      <button type="button" class="btn sm" data-haeadd>＋ Ajouter des entités…</button></div>`;
     case 'ticker': return `<label>${esc(o.label)}<div style="display:flex;gap:8px"><input name="opt_${o.key}" value="${esc(v)}" style="flex:1" placeholder="Nom ou symbole : apple, lvmh, or, bitcoin…" autocapitalize="characters"><button class="btn" type="button" data-tick>Rechercher</button></div></label>
       <div class="geo-res" data-tickres></div>
       <div class="help">Symboles Yahoo Finance. Exemples : <span class="mono">AAPL</span> (Apple), <span class="mono">MC.PA</span> (LVMH, Paris), <span class="mono">^FCHI</span> (CAC 40), <span class="mono">GC=F</span> (or, $/once), <span class="mono">BTC-EUR</span>, <span class="mono">ETH-EUR</span>, <span class="mono">EURUSD=X</span>.</div>`;
@@ -2825,6 +3419,83 @@ function widgetForm(orig) {
     drawBm();
   });
 
+  // --- services surveillés (disponibilité) ---
+  const upIn = form.opt_targets, upList = $('[data-uplist]', m.el);
+  let ups = [];
+  try { ups = JSON.parse(upIn?.value || '[]'); } catch { ups = []; }
+  const upSync = () => { if (!upList) return; $$('.upf-row', upList).forEach((r, i) => { if (ups[i]) { ups[i].name = $('[data-upn]', r).value.trim(); ups[i].url = $('[data-upu]', r).value.trim(); } }); };
+  const upCollect = () => { upSync(); return ups.filter(x => x.url); };
+  const upDraw = () => {
+    if (!upList) return;
+    upList.innerHTML = ups.length ? ups.map((x, i) => `
+      <div class="upf-row"><input class="input" data-upn value="${esc(x.name || '')}" placeholder="Nom">
+        <input class="input mono" data-upu value="${esc(x.url || '')}" placeholder="https://… ou hôte:port">
+        <button type="button" class="iconbtn" data-upup="${i}" title="Monter">↑</button><button type="button" class="iconbtn" data-updel="${i}" title="Retirer">✕</button></div>`).join('')
+      : '<div class="help">Aucun service : ajoute-en un ou importe tes favoris.</div>';
+  };
+  upDraw();
+  upList && m.el.addEventListener('click', e => {
+    const up = e.target.closest('[data-upup]'), del = e.target.closest('[data-updel]');
+    if (up || del) {
+      upSync();
+      const i = Number((up || del).dataset[up ? 'upup' : 'updel']);
+      if (del) ups.splice(i, 1); else if (i > 0) [ups[i - 1], ups[i]] = [ups[i], ups[i - 1]];
+      return upDraw();
+    }
+    if (e.target.closest('[data-upadd]')) { upSync(); ups.push({ id: uid(), name: '', url: '' }); upDraw(); $$('[data-upn]', upList).at(-1)?.focus(); return; }
+    if (e.target.closest('[data-upimp]')) {
+      upSync();
+      const have = new Set(ups.map(x => x.url.replace(/\/+$/, '').toLowerCase()));
+      const links = S.dash.pages.flatMap(p => p.widgets).filter(x => x.type === 'bookmarks').flatMap(x => (x.config?.categories || []).flatMap(c => c.links)).filter(l => !l.noPing);
+      let n = 0;
+      for (const l of links) {
+        const u = (l.pingUrl || l.url || '').trim();
+        if (!/^https?:\/\//i.test(u) || have.has(u.replace(/\/+$/, '').toLowerCase())) continue;
+        have.add(u.replace(/\/+$/, '').toLowerCase()); ups.push({ id: uid(), name: l.name, url: u }); n++;
+      }
+      upDraw();
+      toast(n ? `${n} service(s) importé(s) depuis les favoris` : 'Rien de nouveau à importer');
+    }
+  });
+
+  // --- entités Home Assistant ---
+  const haIn = form.opt_entities, haList = $('[data-haelist]', m.el);
+  let haEnts = [];
+  try { haEnts = JSON.parse(haIn?.value || '[]'); } catch { haEnts = []; }
+  // relit noms et icônes saisis avant de redessiner ou d'enregistrer
+  const haSync = () => { if (!haList) return; $$('.hae-row', haList).forEach((r, i) => { if (!haEnts[i]) return; haEnts[i].name = $('[data-haename]', r).value.trim(); haEnts[i].icon = $('input[type=hidden]', r).value; }); };
+  const haCollect = () => { haSync(); return haEnts.map(({ id, name, icon, label, dc }) => ({ id, name, icon, label, dc })); };
+  const haDraw = () => {
+    if (!haList) return;
+    haList.innerHTML = haEnts.length ? haEnts.map((e, i) => `
+      <div class="hae-row">
+        <span class="icon-field"><input type="hidden" value="${esc(e.icon || '')}"><button type="button" class="btn sm icon-pick" data-iconpick title="Icône (vide = automatique)">${e.icon ? symHtml(e.icon) : symHtml(haIcon({ id: e.id, domain: e.id.split('.')[0], state: 'on', deviceClass: e.dc }))}</button></span>
+        <input class="input" data-haename value="${esc(e.name || '')}" placeholder="${esc(e.label || e.id)}" title="Nom affiché (vide = nom Home Assistant)">
+        <span class="mono small muted hae-id" title="${esc(e.id)}">${esc(e.id)}</span>
+        <button type="button" class="iconbtn" data-haeup="${i}" title="Monter">↑</button>
+        <button type="button" class="iconbtn" data-haedel="${i}" title="Retirer">✕</button>
+      </div>`).join('') : '<div class="help">Aucune entité : clique sur « Ajouter des entités ».</div>';
+  };
+  haDraw();
+  haList && m.el.addEventListener('click', async e => {
+    const up = e.target.closest('[data-haeup]'), del = e.target.closest('[data-haedel]');
+    if (up || del) {
+      haSync();
+      const i = Number((up || del).dataset[up ? 'haeup' : 'haedel']);
+      if (del) haEnts.splice(i, 1); else if (i > 0) [haEnts[i - 1], haEnts[i]] = [haEnts[i], haEnts[i - 1]];
+      return haDraw();
+    }
+    if (!e.target.closest('[data-haeadd]')) return;
+    const intId = form.querySelector('input[name=int]:checked')?.value;
+    if (!intId) return toast('Choisis d\'abord la source Home Assistant ci-dessus', true);
+    haSync();
+    const picked = await pickHaEntities(intId, haEnts.map(x => x.id));
+    if (!picked) return;
+    const keep = new Map(haEnts.map(x => [x.id, x]));
+    haEnts = picked.map(p => keep.get(p.id) || { id: p.id, name: '', icon: '', label: p.name, dc: p.dc });
+    haDraw();
+  });
+
   // --- recherche de symbole (cours) ---
   $('[data-tick]', m.el)?.addEventListener('click', async () => {
     const inp = form.opt_symbol, box = $('[data-tickres]', m.el);
@@ -2880,7 +3551,7 @@ function widgetForm(orig) {
     w.config = w.config || {};
     for (const o of d.options || []) {
       const el = form[`opt_${o.key}`];
-      w.config[o.key] = o.type === 'checkbox' ? el.checked : o.type === 'number' ? Number(el.value) : el.value;
+      w.config[o.key] = o.type === 'checkbox' ? el.checked : o.type === 'number' ? Number(el.value) : o.type === 'haentities' ? haCollect() : o.type === 'targets' ? upCollect() : el.value;
     }
     if (w.type === 'bookmarks') w.config.categories = cats.map(c => ({ ...c, links: c.links.filter(l => l.url) }));
     const ws = page().widgets;
@@ -2977,13 +3648,13 @@ function adminTheme(box) {
 
 // ---------- intégrations : catégories et logos ----------
 // logos des services : Simple Icons (CC0, voir public/icons/brands/LICENSE) ; sinon une icône Lucide
-const INT_CATS = [['mach', 'Machines & conteneurs'], ['media', 'Médias & téléchargements'], ['home', 'Maison connectée'], ['read', 'Lecture & agenda'], ['web', 'Sites web & statistiques'], ['social', 'Réseaux sociaux (publication)'], ['other', 'Autres']];
+const INT_CATS = [['mach', 'Machines & conteneurs'], ['net', 'Réseau & sécurité'], ['backup', 'Sauvegardes'], ['media', 'Médias & téléchargements'], ['home', 'Maison connectée'], ['read', 'Lecture & agenda'], ['web', 'Sites web & statistiques'], ['social', 'Réseaux sociaux (publication)'], ['other', 'Autres']];
 const INT_LOOK = {
   agent: ['mach', 'lucide:server', ''], glances: ['mach', 'lucide:activity', '#3f9d58'], docker: ['mach', 'docker', '#2496ed'],
   plex: ['media', 'plex', '#ebaf00'], jellyfin: ['media', 'jellyfin', '#00a4dc'], qbittorrent: ['media', 'qbittorrent', '#2f67ba'],
   homeassistant: ['home', 'homeassistant', '#18bcf2'],
   freshrss: ['read', 'freshrss', '#0062be'], calendar: ['read', 'lucide:calendar-days', '#e0743a'],
-  umami: ['web', 'umami', '#101010'], demo: ['other', 'lucide:flask-conical', '#6b7280'],
+  umami: ['web', 'umami', '#101010'], adguard: ['net', 'adguard', '#68bc71'], npm: ['net', 'nginxproxymanager', '#f15833'], backrest: ['backup', 'lucide:archive-restore', '#3f7fd8'], restserver: ['backup', 'lucide:database-backup', '#2b9a8f'], demo: ['other', 'lucide:flask-conical', '#6b7280'],
   mastodon: ['social', 'mastodon', '#6364ff'], bluesky: ['social', 'bluesky', '#1185fe'], threads: ['social', 'threads', '#101010'],
   xsocial: ['social', 'x', '#101010'], demosocial: ['social', 'lucide:share-2', '#6b7280']
 };

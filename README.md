@@ -110,6 +110,13 @@ L'intégration Glances reste disponible si tu as déjà Glances quelque part, ma
 | **Home Assistant** | Profil → Sécurité → Jeton d'accès longue durée ; ajoute l'intégration « System Monitor » pour CPU et RAM |
 | **Météo** | Open-Meteo, sans clé. Recherche la ville dans la configuration du widget. |
 | **Cours (bourse, or, crypto)** | Graphique d'une action, d'un indice, de l'or ou d'une crypto via l'API publique de graphiques de Yahoo Finance (sans clé, non officielle). « Rechercher » trouve le symbole : `AAPL`, `MC.PA`, `^FCHI`, `GC=F`, `BTC-EUR`… |
+| **Home Assistant (entités)** | Même jeton que ci-dessus. Dans le widget, « Ajouter des entités » liste tes lumières, prises, thermostats, volets, capteurs… à afficher en tuiles ou en liste et à piloter. |
+| **AdGuard Home** | URL de l'interface web et les identifiants de connexion. Statistiques DNS, classements, pause / désactivation de la protection. |
+| **Nginx Proxy Manager** | URL de l'interface d'administration (port 81) et un compte NPM sans double authentification. Hôtes proxy, certificats qui expirent, activation / désactivation. |
+| **Backrest** | URL (port 9898) et, si l'authentification est activée, un utilisateur. État des plans, historique, prochaine exécution, lancement manuel. |
+| **rest-server (restic)** | URL, un utilisateur du `.htpasswd` et les dépôts à suivre. Nombre de snapshots, taille, sauvegarde en cours ; l'heure de la dernière sauvegarde est déduite de l'apparition des snapshots. |
+| **Disponibilité** | Sans intégration : liste d'adresses web ou `hôte:port` vérifiées en tâche de fond (historique 24 h et 90 jours dans `data/uptime.json`, expiration des certificats HTTPS). |
+| **Recherche** | Sans intégration : DuckDuckGo, Google, Bing, Qwant, Ecosia, Brave, Startpage, SearXNG ou adresse personnalisée ; suggestions, favoris correspondants, touche « / ». |
 
 Une fois les vraies intégrations en place, supprime les intégrations « Démo » dans ⚙ Paramètres → Intégrations.
 

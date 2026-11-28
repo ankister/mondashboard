@@ -8,6 +8,8 @@ import { INTEGRATIONS, WIDGETS, publicMeta } from './lib/integrations/index.js';
 import { readFeed } from './lib/integrations/feeds.js';
 import { weather, geocode } from './lib/weather.js';
 import { quote, searchSymbol } from './lib/finance.js';
+import { uptimeData, parseTarget } from './lib/uptime.js';
+import { suggest } from './lib/search.js';
 import { ping } from './lib/http.js';
 import { seed } from './lib/seed.js';
 import { agentRoutes } from './lib/agentSetup.js';
@@ -119,6 +121,15 @@ function cleanPages(pages) {
         }));
       }
       if (w.type === 'notes') cfg.content = String(cfg.content || '').slice(0, 100000);
+      if (w.type === 'uptime') {
+        cfg.targets = (Array.isArray(cfg.targets) ? cfg.targets : []).filter(t => parseTarget(t?.url)).slice(0, 100)
+          .map(t => ({ id: String(t.id || id()).slice(0, 20), name: String(t.name || '').slice(0, 60), url: String(t.url).trim().slice(0, 300) }));
+      }
+      if (w.type === 'ha') {
+        const okIcon = v => (/^lucide:[a-z0-9-]{1,60}$/.test(v || '') || (typeof v === 'string' && v.length <= 8 && !/[<>&"']/.test(v)) ? v || '' : '');
+        cfg.entities = (Array.isArray(cfg.entities) ? cfg.entities : []).filter(e => /^[a-z_]+\.[a-z0-9_]+$/.test(e?.id || '')).slice(0, 100)
+          .map(e => ({ id: e.id, name: String(e.name || '').slice(0, 60), icon: okIcon(e.icon), label: String(e.label || '').slice(0, 80), dc: String(e.dc || '').slice(0, 30) }));
+      }
       return {
         id: w.id || id(), type: w.type, title: String(w.title ?? WIDGETS[w.type].label).slice(0, 60),
         w: Math.min(12, Math.max(2, Number(w.w) || WIDGETS[w.type].w)),
@@ -199,6 +210,13 @@ function splitConfig(type, input, previousSecret) {
 }
 
 app.get('/api/integrations', requireAdmin, (req, res) => res.json(load().integrations.map(publicIntegration)));
+// liste d'éléments proposée par une intégration (ex. entités Home Assistant pour le sélecteur)
+app.get('/api/integrations/:id/list', requireAdmin, wrap(async req => {
+  const it = getIntegration(req.params.id);
+  const def = INTEGRATIONS[it?.type];
+  if (!def?.list) throw bad('Liste non disponible pour cette intégration', 404);
+  return def.list(it.config, req.query);
+}));
 
 app.post('/api/integrations', requireAdmin, wrap(req => {
   const { type, name, config } = req.body || {};
@@ -236,6 +254,13 @@ app.post('/api/integrations/test', requireAdmin, wrap(async req => {
 }));
 
 app.get('/api/geocode', requireAdmin, wrap(req => geocode(String(req.query.q || ''))));
+// suggestions de la barre de recherche (réglages pris dans le widget, jamais dans la requête)
+app.get('/api/search/suggest', requireView, wrap(async req => {
+  const w = findWidget(String(req.query.p || ''), String(req.query.w || ''));
+  if (!w || w.type !== 'search' || w.config?.suggest === false) return [];
+  const engine = ['DuckDuckGo', 'Google', 'Bing', 'Qwant', 'Ecosia', 'Brave', 'Startpage', 'SearXNG'].includes(req.query.e) ? req.query.e : w.config?.engine;
+  try { return await suggest(engine, w.config?.searxUrl, String(req.query.q || '')); } catch { return []; }
+}));
 app.get('/api/finance/search', requireAdmin, wrap(req => searchSymbol(String(req.query.q || '').slice(0, 60))));
 
 // ---------- Données des widgets ----------
@@ -275,8 +300,11 @@ async function widgetData(w) {
       return weather(cfg);
     case 'stock':
       return quote(cfg);
+    case 'uptime':
+      return uptimeData(cfg);
     case 'notes':
     case 'title':
+    case 'search':
       return {};
     case 'rss': {
       const { results, errors } = await fromIntegrations(w, 'rss');
@@ -305,6 +333,9 @@ async function widgetData(w) {
       if (kind === 'machine' || kind === 'torrents') return { ...(results[0] || {}), errors, offline: !results.length };
       if (kind === 'docker') return { containers: results.flatMap(r => r.containers), checks: results.flatMap(r => r.checks || []), errors };
       if (kind === 'media') return { sessions: results.flatMap(r => r.sessions), errors };
+      if (kind === 'dns' || kind === 'proxy') return { servers: results, errors };
+      if (kind === 'backup') return { items: results.flatMap(r => r.items || []), errors };
+      if (kind === 'ha') return { ...(results[0] || { entities: [] }), errors, offline: !results.length };
       if (kind === 'analytics') return { sites: results.flatMap(r => r.sites), period: results[0]?.period, errors };
       if (kind === 'calendar') {
         return { events: results.flatMap(r => r.events).sort((a, b) => a.start.localeCompare(b.start)), errors };
@@ -373,7 +404,9 @@ app.post('/api/widgets/:pageId/:widgetId/action', requireAdmin, wrap(async req =
   const def = INTEGRATIONS[it?.type];
   if (!def?.action) throw bad('Action non disponible');
   const r = await def.action(it.config, req.body, it);
-  for (const k of cache.keys()) if (k === w.id || k.startsWith(w.id + '|')) cache.delete(k);
+  // vide le cache de ce widget et de tous ceux qui utilisent la même intégration
+  const ids = new Set([w.id, ...load().pages.flatMap(p => p.widgets).filter(x => x.integrations?.includes(intId)).map(x => x.id)]);
+  for (const k of cache.keys()) if (ids.has(k.split('|')[0])) cache.delete(k);
   return r;
 }));
 
