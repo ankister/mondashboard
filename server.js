@@ -377,6 +377,41 @@ app.post('/api/widgets/:pageId/:widgetId/action', requireAdmin, wrap(async req =
   return r;
 }));
 
+// ---------- Publication sur les réseaux sociaux ----------
+const socialDefs = () => load().integrations.filter(i => INTEGRATIONS[i.type]?.provides?.includes('social'));
+const netOf = it => INTEGRATIONS[it.type].network || it.config?.network || '';
+const handles = new Map(); // integrationId -> { at, handle }
+app.get('/api/share/accounts', requireAdmin, wrap(async () => Promise.all(socialDefs().map(async i => {
+  const it = getIntegration(i.id);
+  let handle = handles.get(i.id);
+  if (!handle || Date.now() - handle.at > 6 * 3600e3) {
+    try { handle = { at: Date.now(), handle: await INTEGRATIONS[i.type].handle(it.config) }; }
+    catch { handle = { at: Date.now() - 6 * 3600e3 + 60e3, handle: '' }; }
+    handles.set(i.id, handle);
+  }
+  let instance = '';
+  if (netOf(i) === 'Mastodon') { try { instance = new URL(/^https?:/i.test(it.config.url || '') ? it.config.url : `https://${it.config.url || 'mastodon.social'}`).host; } catch { /* ignoré */ } }
+  return { id: i.id, name: i.name, network: netOf(i), handle: handle.handle, instance };
+}))));
+
+app.post('/api/share/publish', requireAdmin, wrap(async req => {
+  const { posts, article } = req.body || {};
+  if (!Array.isArray(posts) || !posts.length || posts.length > 12) throw bad('Rien à publier');
+  const art = {
+    title: String(article?.title || '').slice(0, 300), link: String(article?.link || '').slice(0, 2000),
+    description: String(article?.description || '').slice(0, 300), image: String(article?.image || '').slice(0, 2000)
+  };
+  return Promise.all(posts.map(async p => {
+    const it = getIntegration(String(p.id));
+    const def = INTEGRATIONS[it?.type];
+    if (!def?.provides?.includes('social')) return { id: p.id, ok: false, error: 'Compte introuvable' };
+    const text = String(p.text || '').trim().slice(0, 5000);
+    if (!text) return { id: p.id, ok: false, error: 'Texte vide' };
+    try { return { id: p.id, ok: true, ...(await def.post(it.config, text, art, it)) }; }
+    catch (e) { return { id: p.id, ok: false, error: e.message }; }
+  }));
+}));
+
 // ---------- Agent (push, installation) ----------
 agentRoutes(app, { requireAdmin, wrap, bad });
 

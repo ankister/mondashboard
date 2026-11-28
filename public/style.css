@@ -824,3 +824,33 @@ header.top { align-items: flex-start; }
 .stk-mini .stk-day { font-size: 12px; }
 @container (max-width: 380px) { .stk-band { flex-wrap: wrap; } .stk-band-c { flex-basis: 100%; order: 5; } }
 .w-dyn:has(.stk-band) { container-type: inline-size; }
+/* partage : format, comptes connectés, publication directe */
+.share-fmt { display: flex; flex-direction: column; gap: 6px; }
+.share-fmt label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+.share-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.share-chips .chip { cursor: pointer; color: var(--text); font-family: ui-monospace, monospace; }
+.share-chips .chip:hover { border-color: var(--accent); }
+.share-accs { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.share-acc { display: flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
+.share-acc input { width: 16px; height: 16px; accent-color: var(--accent); }
+.share-st { font-size: 12.5px; }
+.share-st.wait { color: var(--muted); }
+.share-st.ok { color: #4ade80; }
+.share-st.ko { color: #ff6b6b; }
+.share-off { font-size: 12.5px; }
+.share-net.too-long { border-color: rgba(255, 107, 107, .5); }
+.share-go { font-weight: 500; }
+.share .btn:disabled, .modal:has(.share) .btn.primary:disabled { opacity: .45; cursor: not-allowed; }
+@media (max-width: 600px) {
+  .share .lbl { display: none; }
+  .share-row { flex-wrap: nowrap; gap: 8px; }
+  .share-name { min-width: 0; }
+  .share-art img { width: 56px; height: 40px; }
+}
+/* fenêtre de partage : le bouton Publier reste visible en bas de l'écran */
+.modal:has(.share) .modal-f { position: sticky; bottom: 0; background: var(--bg2); border-radius: 0 0 14px 14px; z-index: 2; }
+@media (max-width: 600px) {
+  .modal:has(.share) .modal-f { gap: 8px; padding-left: 14px; padding-right: 14px; }
+  .modal:has(.share) .modal-f .lbl { display: none; }
+  .modal:has(.share) .modal-f .btn.primary { flex: 1; min-width: 0; white-space: normal; }
+}

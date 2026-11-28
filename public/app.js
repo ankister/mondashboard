@@ -1247,7 +1247,9 @@ let RD_RESIZE = null;
 window.addEventListener('resize', () => { clearTimeout(RD_RESIZE); RD_RESIZE = setTimeout(rdFitAll, 120); });
 
 // ---------- partage d'un article sur les réseaux sociaux (texte modifiable avant publication) ----------
-// Chaque réseau ouvre sa propre fenêtre de publication avec le texte déjà rempli : rien n'est publié depuis le dashboard.
+// Deux façons de publier :
+// - comptes connectés (Administration → Intégrations) : publication directe, plusieurs réseaux en un clic ;
+// - sinon, « Ouvrir » ouvre la fenêtre de publication du réseau avec le texte déjà rempli.
 const SHARE_NETS = [
   { key: 'X', opt: 'shareX', label: 'X', max: 280, urlLen: 23, color: '#8b98a5',
     href: t => `https://x.com/intent/tweet?text=${encodeURIComponent(t)}` },
@@ -1258,6 +1260,7 @@ const SHARE_NETS = [
   { key: 'Bluesky', opt: 'shareBluesky', label: 'Bluesky', max: 300, color: '#3b9dff',
     href: t => `https://bsky.app/intent/compose?text=${encodeURIComponent(t)}` }
 ];
+const SHARE_DEFAULT = '{titre} - {lien}';
 const URL_RE = /https?:\/\/[^\s]+/g;
 function shareLen(text, net) {
   // X et Mastodon comptent chaque lien pour 23 caractères ; Bluesky et Threads comptent le texte entier
@@ -1265,41 +1268,68 @@ function shareLen(text, net) {
   try { return [...new Intl.Segmenter('fr', { granularity: 'grapheme' }).segment(t)].length; } catch { return [...t].length; }
 }
 const cleanInstance = v => String(v || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase();
-function shareText(w, it) {
-  const tpl = w.config?.shareTemplate || '{titre} - {lien}';
-  return tpl.replace(/\{titre\}/g, it.title || '').replace(/\{lien\}/g, it.link || '').replace(/\{source\}/g, it.source || '').trim();
+const shareApply = (tpl, it) => String(tpl || SHARE_DEFAULT).replace(/\\n/g, '\n')
+  .replace(/\{titre\}/g, it.title || '').replace(/\{lien\}/g, it.link || '').replace(/\{source\}/g, it.source || '')
+  .replace(/[ \t]+\n/g, '\n').trim();
+async function shareAccounts(force) {
+  if (!canEdit()) return [];
+  if (!force && S.shareAcc && Date.now() - S.shareAcc.at < 300000) return S.shareAcc.list;
+  try { S.shareAcc = { at: Date.now(), list: await api('/share/accounts') }; } catch { return S.shareAcc?.list || []; }
+  return S.shareAcc.list;
 }
-function shareDialog(w, it) {
+async function shareDialog(w, it) {
   if (!it) return;
   const c = w.config || {};
-  const nets = SHARE_NETS.filter(n => c[n.opt] !== false);
+  const accounts = await shareAccounts();
+  // un réseau apparaît s'il est activé dans les réglages du lecteur ou s'il a un compte connecté
+  const nets = SHARE_NETS.map(n => ({ ...n, acc: accounts.filter(a => a.network === n.key) }))
+    .filter(n => c[n.opt] !== false || n.acc.length);
   if (!nets.length) { toast('Aucun réseau activé pour le partage (⚙ du lecteur)', true); return; }
-  const base = shareText(w, it);
+  let tpl = c.shareTemplate || SHARE_DEFAULT;
+  let base = shareApply(tpl, it);
   const texts = Object.fromEntries(nets.map(n => [n.key, base]));
   const own = new Set(); // réseaux dont le texte a été adapté à part
-  let inst = cleanInstance(localStorageGet('share_mastodon') || c.mastodonInstance);
+  let inst = cleanInstance(accounts.find(a => a.network === 'Mastodon' && a.instance)?.instance || localStorageGet('share_mastodon') || c.mastodonInstance);
+  let picked;
+  try { picked = new Set(JSON.parse(localStorageGet('share_picked') || 'null') || []); } catch { picked = new Set(); }
+  if (!localStorageGet('share_picked')) nets.forEach(n => n.acc.forEach(a => picked.add(a.id)));
+  const allAcc = nets.flatMap(n => n.acc);
+  const accHtml = a => `<label class="share-acc"><input type="checkbox" data-acc="${esc(a.id)}" ${picked.has(a.id) ? 'checked' : ''}>
+    <span>${esc(a.handle || a.name)}</span><span class="share-st" data-st="${esc(a.id)}"></span></label>`;
   const m = modal({
     title: 'Partager l\'article',
     body: `<div class="share">
       <div class="share-art">${rdImg(it.image) ? `<img src="${esc(it.image)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
         <div><b>${esc(it.title)}</b><div class="muted small">${esc(it.source || '')} · <span class="mono">${esc((it.link || '').replace(/^https?:\/\//, '').slice(0, 70))}</span></div></div></div>
+      <div class="share-fmt">
+        <label>Format<input class="input mono" data-fmt value="${esc(tpl)}" spellcheck="false"></label>
+        <div class="share-chips">${['{titre}', '{lien}', '{source}', '\\n'].map(t => `<button type="button" class="chip" data-ins="${t}" title="${t === '\\n' ? 'Retour à la ligne' : 'Insérer'}">${t === '\\n' ? '↵ ligne' : t}</button>`).join('')}
+          <span style="flex:1"></span>
+          ${canEdit() ? '<button type="button" class="btn sm" data-fmtsave disabled>Enregistrer comme format par défaut</button>' : ''}</div>
+      </div>
       <label class="share-main">Texte du message<textarea data-sh="all" rows="4">${esc(base)}</textarea></label>
-      <div class="help">Modifie le texte ici, puis clique sur un réseau : sa fenêtre de publication s'ouvre avec ce texte, et tu valides (ou retouches encore) là-bas. « Adapter » donne un texte propre à un réseau.</div>
       <div class="share-nets">${nets.map(n => `
         <div class="share-net" data-net="${n.key}" style="--nc:${n.color}">
           <div class="share-row">
             <span class="share-name">${n.label}</span>
             <span class="share-cnt small" data-cnt></span>
-            <button type="button" class="btn sm" data-adapt>Adapter</button>
-            <a class="btn sm primary share-go" data-go target="_blank" rel="noopener">Publier sur ${n.label} ↗</a>
+            <button type="button" class="btn sm" data-adapt></button>
+            <a class="btn sm share-go" data-go target="_blank" rel="noopener">↗<span class="lbl"> Ouvrir</span></a>
           </div>
-          ${n.key === 'Mastodon' ? `<div class="share-inst"><span class="muted small">Instance</span><input class="input" data-inst placeholder="mastodon.social" value="${esc(inst)}"></div>` : ''}
+          ${n.acc.length ? `<div class="share-accs">${n.acc.map(accHtml).join('')}</div>`
+            : `<div class="muted small share-off">Pas de compte connecté : « Ouvrir » pour publier à la main${canEdit() ? ' · <a href="#" data-connect>connecter un compte</a>' : ''}</div>`}
+          ${n.key === 'Mastodon' && !n.acc.length ? `<div class="share-inst"><span class="muted small">Instance</span><input class="input" data-inst placeholder="mastodon.social" value="${esc(inst)}"></div>` : ''}
           <textarea data-sh="${n.key}" rows="3" hidden></textarea>
         </div>`).join('')}</div>
     </div>`,
-    footer: '<button class="btn" data-copy>📋 Copier le texte</button><button class="btn primary" data-close2>Fermer</button>'
+    footer: `<button class="btn" data-copy title="Copier le texte">📋<span class="lbl"> Copier</span></button><span style="flex:1"></span><button class="btn" data-close2>Fermer</button>
+      ${allAcc.length ? '<button class="btn primary" data-pub></button>' : ''}`
   });
   const main = $('[data-sh=all]', m.el);
+  const fmt = $('[data-fmt]', m.el);
+  const pubBtn = $('[data-pub]', m.el);
+  let busy = false, done = false;
+  const netOfAcc = id => nets.find(n => n.acc.some(a => a.id === id));
   const refresh = () => {
     for (const n of nets) {
       const box = $(`[data-net="${n.key}"]`, m.el);
@@ -1313,17 +1343,54 @@ function shareDialog(w, it) {
       const bad = !t.trim() || len > n.max || !href;
       go.classList.toggle('disabled', bad);
       if (bad) go.removeAttribute('href'); else go.href = href;
-      go.title = !href ? 'Indique d\'abord ton instance Mastodon' : len > n.max ? `Trop long pour ${n.label} : raccourcis le texte` : `Ouvre ${n.label} avec ce texte`;
-      $('[data-adapt]', box).textContent = own.has(n.key) ? 'Reprendre le texte commun' : 'Adapter';
+      go.title = !href ? 'Indique d\'abord ton instance Mastodon' : len > n.max ? `Trop long pour ${n.label} : raccourcis le texte` : `Ouvre ${n.label} avec ce texte, pour publier à la main`;
+      $('[data-adapt]', box).innerHTML = own.has(n.key) ? '↺<span class="lbl"> Texte commun</span>' : '✎<span class="lbl"> Adapter</span>';
+      $('[data-adapt]', box).title = own.has(n.key) ? 'Reprendre le texte commun' : `Texte propre à ${n.label}`;
+      box.classList.toggle('too-long', len > n.max);
     }
+    if (pubBtn) {
+      const sel = allAcc.filter(a => picked.has(a.id));
+      const tooLong = sel.filter(a => { const n = netOfAcc(a.id); return shareLen(texts[n.key], n) > n.max; });
+      const nNets = new Set(sel.map(a => netOfAcc(a.id).key)).size;
+      pubBtn.disabled = busy || !sel.length || !!tooLong.length || !main.value.trim();
+      pubBtn.textContent = busy ? 'Publication…' : !sel.length ? (done ? '✓ Publié' : 'Coche au moins un compte')
+        : tooLong.length ? `Trop long pour ${[...new Set(tooLong.map(a => netOfAcc(a.id).label))].join(', ')}`
+        : `Publier sur ${sel.length > nNets ? `${sel.length} comptes` : nNets > 1 ? `${nNets} réseaux` : netOfAcc(sel[0].id).label}`;
+    }
+    const sv = $('[data-fmtsave]', m.el);
+    if (sv) sv.disabled = (fmt.value || SHARE_DEFAULT) === (c.shareTemplate || SHARE_DEFAULT);
   };
+  const setBase = v => { base = v; main.value = v; for (const n of nets) if (!own.has(n.key)) texts[n.key] = v; };
   main.addEventListener('input', () => { for (const n of nets) if (!own.has(n.key)) texts[n.key] = main.value; refresh(); });
+  fmt.addEventListener('input', () => { tpl = fmt.value; setBase(shareApply(tpl, it)); refresh(); });
   m.el.addEventListener('input', e => {
     const k = e.target.dataset.sh;
     if (k && k !== 'all') { texts[k] = e.target.value; refresh(); }
     if (e.target.matches('[data-inst]')) { inst = cleanInstance(e.target.value); localStorageSet('share_mastodon', inst); refresh(); }
   });
-  m.el.addEventListener('click', e => {
+  m.el.addEventListener('change', e => {
+    const id = e.target.dataset.acc;
+    if (!id) return;
+    if (e.target.checked) picked.add(id); else picked.delete(id);
+    localStorageSet('share_picked', JSON.stringify([...picked]));
+    refresh();
+  });
+  m.el.addEventListener('click', async e => {
+    const ins = e.target.closest('[data-ins]');
+    if (ins) {
+      const v = ins.dataset.ins, s0 = fmt.selectionStart ?? fmt.value.length, s1 = fmt.selectionEnd ?? s0;
+      fmt.value = fmt.value.slice(0, s0) + v + fmt.value.slice(s1);
+      fmt.focus(); fmt.setSelectionRange(s0 + v.length, s0 + v.length);
+      fmt.dispatchEvent(new Event('input'));
+      return;
+    }
+    if (e.target.closest('[data-fmtsave]')) {
+      w.config = { ...w.config, shareTemplate: fmt.value.trim() || SHARE_DEFAULT };
+      try { await savePages(false); toast('Format enregistré pour les prochains partages ✓'); } catch (err) { toast(err.message, true); }
+      refresh();
+      return;
+    }
+    if (e.target.closest('[data-connect]')) { e.preventDefault(); m.close(); openAdmin('int'); return; }
     const ad = e.target.closest('[data-adapt]');
     if (ad) {
       const box = ad.closest('[data-net]'), k = box.dataset.net, ta = $('textarea', box);
@@ -1334,6 +1401,32 @@ function shareDialog(w, it) {
     }
     const go = e.target.closest('[data-go]');
     if (go?.classList.contains('disabled')) { e.preventDefault(); toast(go.title, true); }
+  });
+  pubBtn?.addEventListener('click', async () => {
+    const sel = allAcc.filter(a => picked.has(a.id));
+    if (!sel.length || busy) return;
+    busy = true;
+    sel.forEach(a => { const st = $(`[data-st="${a.id}"]`, m.el); st.className = 'share-st wait'; st.textContent = 'envoi…'; });
+    refresh();
+    const desc = (it._ex ?? rdText(it.content)).slice(0, 280);
+    try {
+      const res = await api('/share/publish', {
+        method: 'POST',
+        body: { posts: sel.map(a => ({ id: a.id, text: texts[netOfAcc(a.id).key] })), article: { title: it.title, link: it.link, description: desc, image: /^https?:/i.test(it.image || '') ? it.image : '' } }
+      });
+      let ok = 0;
+      for (const r of res) {
+        const st = $(`[data-st="${r.id}"]`, m.el);
+        if (!st) continue;
+        if (r.ok) { ok++; st.className = 'share-st ok'; st.innerHTML = `✓ publié${r.url ? ` · <a href="${esc(safeUrl(r.url))}" target="_blank" rel="noopener">voir ↗</a>` : ''}`; picked.delete(r.id); $(`[data-acc="${r.id}"]`, m.el).checked = false; }
+        else { st.className = 'share-st ko'; st.textContent = `✗ ${r.error}`; }
+      }
+      const ko = res.length - ok;
+      done = ok > 0;
+      toast(ko ? `${ok} publié${ok > 1 ? 's' : ''}, ${ko} en échec` : `Publié sur ${ok} compte${ok > 1 ? 's' : ''} ✓`, !!ko);
+    } catch (err) { toast(err.message, true); sel.forEach(a => { const st = $(`[data-st="${a.id}"]`, m.el); st.className = 'share-st ko'; st.textContent = '✗ non envoyé'; }); }
+    busy = false;
+    refresh();
   });
   $('[data-copy]', m.el).onclick = async () => {
     try { await navigator.clipboard.writeText(main.value); toast('Texte copié ✓'); }
@@ -2884,13 +2977,15 @@ function adminTheme(box) {
 
 // ---------- intégrations : catégories et logos ----------
 // logos des services : Simple Icons (CC0, voir public/icons/brands/LICENSE) ; sinon une icône Lucide
-const INT_CATS = [['mach', 'Machines & conteneurs'], ['media', 'Médias & téléchargements'], ['home', 'Maison connectée'], ['read', 'Lecture & agenda'], ['web', 'Sites web & statistiques'], ['other', 'Autres']];
+const INT_CATS = [['mach', 'Machines & conteneurs'], ['media', 'Médias & téléchargements'], ['home', 'Maison connectée'], ['read', 'Lecture & agenda'], ['web', 'Sites web & statistiques'], ['social', 'Réseaux sociaux (publication)'], ['other', 'Autres']];
 const INT_LOOK = {
   agent: ['mach', 'lucide:server', ''], glances: ['mach', 'lucide:activity', '#3f9d58'], docker: ['mach', 'docker', '#2496ed'],
   plex: ['media', 'plex', '#ebaf00'], jellyfin: ['media', 'jellyfin', '#00a4dc'], qbittorrent: ['media', 'qbittorrent', '#2f67ba'],
   homeassistant: ['home', 'homeassistant', '#18bcf2'],
   freshrss: ['read', 'freshrss', '#0062be'], calendar: ['read', 'lucide:calendar-days', '#e0743a'],
-  umami: ['web', 'umami', '#101010'], demo: ['other', 'lucide:flask-conical', '#6b7280']
+  umami: ['web', 'umami', '#101010'], demo: ['other', 'lucide:flask-conical', '#6b7280'],
+  mastodon: ['social', 'mastodon', '#6364ff'], bluesky: ['social', 'bluesky', '#1185fe'], threads: ['social', 'threads', '#101010'],
+  xsocial: ['social', 'x', '#101010'], demosocial: ['social', 'lucide:share-2', '#6b7280']
 };
 function intIcon(type) {
   const [, ic, col] = INT_LOOK[type] || ['other', 'lucide:plug', '#6b7280'];
@@ -2919,7 +3014,7 @@ function adminIntegrations(box, m) {
   box.onclick = async e => {
     if (e.target.closest('[data-new]')) {
       box.innerHTML = intGroups(Object.keys(types), k => k, keys => `<div class="type-grid">${keys.map(k => { const t = types[k]; return `
-        <button class="type-card" data-t="${k}">${intIcon(k)}<div><b>${esc(t.label)}</b><div class="muted small">Pour : ${t.provides.map(p => esc((S.meta.widgets[p] || Object.values(S.meta.widgets).find(w => w.kind === p))?.label || p)).join(', ')}</div></div></button>`; }).join('')}</div>`) + `
+        <button class="type-card" data-t="${k}">${intIcon(k)}<div><b>${esc(t.label)}</b><div class="muted small">Pour : ${t.provides.map(p => esc(p === 'social' ? 'Partage depuis le Lecteur RSS' : (S.meta.widgets[p] || Object.values(S.meta.widgets).find(w => w.kind === p))?.label || p)).join(', ')}</div></div></button>`; }).join('')}</div>`) + `
         <div style="margin-top:12px"><button class="btn" data-back>← Retour</button></div>`;
       return;
     }
