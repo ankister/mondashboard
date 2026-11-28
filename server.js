@@ -66,7 +66,7 @@ function cleanPages(pages) {
   return pages.map(p => ({
     id: p.id || id(),
     name: String(p.name || 'Onglet').slice(0, 40),
-    icon: String(p.icon || '').slice(0, 8),
+    icon: /^lucide:[a-z0-9-]{1,60}$/.test(p.icon || '') ? p.icon : String(p.icon || '').slice(0, 8),
     ...(p.free ? { free: true } : {}),
     widgets: (p.widgets || []).filter(w => WIDGETS[w.type]).map(w => {
       const cfg = w.config && typeof w.config === 'object' ? w.config : {};

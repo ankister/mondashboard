@@ -156,3 +156,8 @@ Le conteneur démarre en root uniquement le temps d'attribuer le dossier `/data`
 ## 7. Ajouter une intégration
 
 Crée `lib/integrations/monservice.js` avec `{ label, help, provides, fields, test(), fetch(kind, config, widgetConfig, integration), action?() }`, puis enregistre-le dans `lib/integrations/index.js`. Le formulaire d'administration est généré automatiquement à partir de `fields`.
+
+## Crédits
+
+- Icônes d'onglets et de barres de titre : [Lucide](https://lucide.dev) (licence ISC, voir `public/icons/lucide/LICENSE`).
+- Grille des widgets : [gridstack.js](https://gridstackjs.com) (licence MIT).

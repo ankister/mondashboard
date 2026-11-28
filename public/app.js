@@ -74,6 +74,7 @@ function siteIcons(url) {
 function iconHtml(icon, name, url) {
   const letter = `<span class="letter">${esc((name || '?').trim()[0]?.toUpperCase() || '?')}</span>`;
   icon = String(icon || '').trim();
+  if (/^lucide:[a-z0-9-]+$/.test(icon)) return `<span class="lic" style="--i:url('/icons/lucide/${icon.slice(7)}.svg');width:26px;height:26px"></span>`;
   if (icon && /\p{Extended_Pictographic}/u.test(icon) && !/[a-z0-9]/i.test(icon)) return `<span style="font-size:26px">${esc(icon)}</span>`;
   let list;
   if (/^(https?:)?\/\//.test(icon) || icon.startsWith('/')) list = [icon];
@@ -254,7 +255,7 @@ function renderApp() {
     <nav class="tabs" id="tabs">
       ${S.dash.pages.map(pg => `
         <button class="tab ${pg.id === p?.id ? 'active' : ''}" data-tab="${pg.id}" ${S.edit ? 'draggable="true"' : ''}>
-          ${pg.icon ? `<span>${esc(pg.icon)}</span>` : ''}${esc(pg.name)}
+          ${pg.icon ? symHtml(pg.icon) : ''}${esc(pg.name)}
           ${S.edit && pg.id === p?.id ? '<span class="tab-edit" data-act="edit-tab" title="Modifier l\'onglet">✎</span>' : ''}
         </button>`).join('')}
       ${S.edit ? '<button class="tab tab-add" data-act="add-tab">＋ Onglet</button>' : ''}
@@ -1993,7 +1994,7 @@ const RENDER = {
       const cls = { Petite: 's', Moyenne: 'm', Grande: 'l' }[c.size] || 'm';
       const al = { Gauche: 'left', Centre: 'center', Droite: 'right' }[c.align] || 'left';
       return `<div class="tbar tsz-${cls} ${c.line ? 'tbar-line' : ''}" style="text-align:${al}">
-        <div class="tbar-t">${c.icon ? `<span class="tbar-i">${esc(c.icon)}</span>` : ''}${esc(w.title)}</div>
+        <div class="tbar-t">${c.icon ? `<span class="tbar-i">${symHtml(c.icon)}</span>` : ''}${esc(w.title)}</div>
         ${c.subtitle ? `<div class="tbar-s">${esc(c.subtitle)}</div>` : ''}</div>`;
     }
   },
@@ -2301,7 +2302,8 @@ function editTab(pg) {
     title: pg ? 'Modifier l\'onglet' : 'Nouvel onglet',
     body: `<form class="form" id="tabForm"><div class="row2">
       <label>Nom<input name="name" value="${esc(pg?.name || '')}" required maxlength="40"></label>
-      <label>Icône (emoji, optionnel)<input name="icon" value="${esc(pg?.icon || '')}" maxlength="8" placeholder="🏠"></label></div>
+      <label>Icône<span class="icon-field"><input type="hidden" name="icon" value="${esc(pg?.icon || '')}">
+        <button type="button" class="btn icon-pick" data-iconpick>${pg?.icon ? symHtml(pg.icon) : '<span class="muted">Aucune</span>'}<span class="small muted">Choisir…</span></button></span></label></div>
       ${pg ? '' : `<label>Contenu de départ<select name="tpl">
         <option value="">Onglet vide</option>
         <option value="reader">Lecteur RSS (FreshRSS) en pleine page</option>
@@ -2318,8 +2320,9 @@ function editTab(pg) {
   tpl?.addEventListener('change', () => {
     $('[data-tplhelp]', m.el).hidden = !tpl.value;
     const n = $('[name=name]', m.el), ic = $('[name=icon]', m.el);
-    if (tpl.value === 'reader') { if (!n.value.trim()) n.value = 'Lecture'; if (!ic.value.trim()) ic.value = '📖'; }
+    if (tpl.value === 'reader') { if (!n.value.trim()) n.value = 'Lecture'; if (!ic.value.trim()) { ic.value = 'lucide:book-open'; $('[data-iconpick]', m.el).innerHTML = symHtml(ic.value) + '<span class="small muted">Choisir…</span>'; } }
   });
+  bindIconPick(m.el);
   $('[data-ok]', m.el).onclick = () => {
     const f = Object.fromEntries(new FormData($('#tabForm', m.el)));
     if (!f.name.trim()) return;
@@ -2368,6 +2371,82 @@ function pickWidgetType() {
   });
 }
 
+// ---------- icônes (onglets, barre de titre) : Lucide (ISC) ou emoji ----------
+function symHtml(v) {
+  const m = /^lucide:([a-z0-9-]{1,60})$/.exec(v || '');
+  if (m) return `<span class="lic" style="--i:url('/icons/lucide/${m[1]}.svg')" role="img" aria-label="${m[1]}"></span>`;
+  return `<span class="emo">${esc(v || '')}</span>`;
+}
+const ICON_SETS = [
+  ['Serveurs & réseau', 'server:serveur|server-nas:nas serveur stockage|folder-network:partage réseau nas|server-cog:serveur réglages|hard-drive:disque nas stockage|hard-drive-download:disque téléchargement|hard-drive-upload:disque envoi|database:base de données nas|database-backup:sauvegarde|archive:archive sauvegarde|network:réseau|router:routeur box|wifi:wifi réseau|ethernet-port:réseau câble|cable:câble|cloud:cloud nuage|cloud-download:cloud téléchargement|container:docker conteneur|box:conteneur paquet|boxes:conteneurs docker|cpu:processeur|memory-stick:mémoire ram|monitor:écran ordinateur|monitor-cog:écran réglages|laptop:ordinateur portable|computer:ordinateur pc|pc-case:pc tour|terminal:terminal console|square-terminal:terminal ssh|code:code développement|git-branch:git|globe:web internet site|webhook:webhook automatisation|shield:sécurité|shield-check:sécurité|lock:verrou sécurité|key-round:clé mot de passe|activity:activité supervision|gauge:jauge performance|chart-line:graphique statistiques|chart-bar:statistiques|layout-dashboard:tableau de bord|radar:radar supervision|satellite-dish:satellite antenne|antenna:antenne|plug:prise énergie|power:alimentation|battery:batterie|thermometer:température|fan:ventilateur|magnet:aimant torrent'],
+  ['Médias', 'film:film cinéma|clapperboard:cinéma vidéo|tv:télévision|tv-minimal:tv|popcorn:cinéma|video:vidéo|music:musique|headphones:casque musique|disc-3:disque musique|radio:radio|podcast:podcast|mic:micro|camera:photo appareil|image:image photo|images:photos galerie|gamepad-2:jeu jeux|book-open:lecture livre|library:bibliothèque livres|newspaper:actualités journal|rss:rss flux'],
+  ['Maison', 'house:maison accueil|lamp:lampe|lightbulb:ampoule lumière|sofa:salon|bed:chambre|bath:salle de bain|cooking-pot:cuisine|utensils:cuisine repas recettes|coffee:café|thermometer-sun:chaleur température|sun:soleil météo|cloud-sun:météo|umbrella:pluie météo|trees:jardin arbres|flower-2:fleur jardin|dog:chien|cat:chat|baby:bébé|car:voiture|bike:vélo|plane:avion voyage|train-front:train voyage|map:carte|map-pin:lieu|calendar:calendrier agenda|clock:horloge|alarm-clock:réveil|bell:notification'],
+  ['Fichiers & docs', 'folder:dossier|folder-open:dossier|file:fichier|file-text:document|files:fichiers|notebook-pen:notes|sticky-note:note|clipboard-list:liste|list-todo:tâches|book:livre|bookmark:favori marque-page|download:téléchargement|upload:envoi|share-2:partage|link:lien|mail:mail courriel|message-circle:message|inbox:boîte de réception|printer:imprimante|scan:scanner'],
+  ['Divers', 'star:étoile favori|heart:cœur|flag:drapeau|tag:étiquette|sparkles:nouveau|rocket:fusée|zap:éclair|flame:feu|wrench:outil|settings:réglages|hammer:bricolage|briefcase:travail|graduation-cap:études école|shopping-cart:courses achats|wallet:portefeuille|euro:argent budget|piggy-bank:épargne|gift:cadeau|trophy:trophée|smile:sourire|user:utilisateur|users:famille utilisateurs|ghost:fantôme|bot:robot ia|brain:cerveau ia|puzzle:puzzle']
+].map(([cat, list]) => [cat, list.split('|').map(x => { const [n, fr] = x.split(':'); return { n, fr }; })]);
+const EMOJIS = '🏠 🖥️ 💻 🗄️ 💾 📡 🌐 🛡️ 🔒 🐳 📦 ⚙️ 🔧 🛠️ 🎬 📺 🎵 🎧 🎮 📷 📖 📰 📚 🗂️ 📁 📝 📅 ⏰ 🔔 ☁️ 🌤️ 🌡️ 💡 🔌 🔋 📊 📈 🚀 ⭐ ❤️ 🏡 🚗 ✈️ 🍳 🛒 💰 🤖 🧪 🎨 🧩 🐱 🐶 🌿'.split(' ');
+let LUCIDE_INDEX = null;
+// fenêtre de choix : renvoie « lucide:nom », un emoji, '' (aucune) ou null (annulé)
+function pickIcon(current) {
+  return new Promise(resolve => {
+    let done = false;
+    const m = modal({
+      title: 'Choisir une icône',
+      body: `<div class="ip">
+        <input class="input" type="search" placeholder="Rechercher (serveur, nas, rss, film, maison…)" data-ipq>
+        <div class="ip-tabs">${ICON_SETS.map(([c], i) => `<button type="button" class="btn sm ${i ? '' : 'on'}" data-ipc="${i}">${esc(c)}</button>`).join('')}<button type="button" class="btn sm" data-ipc="emoji">Emojis</button></div>
+        <div class="ip-grid" data-ipg></div>
+        <div class="muted small ip-foot">Icônes <a href="https://lucide.dev" target="_blank" rel="noopener">Lucide</a> (licence ISC) · la recherche couvre aussi les ${'2 400'} icônes de la bibliothèque, en anglais</div>
+      </div>`,
+      footer: `<button class="btn" data-ipnone style="margin-right:auto">Aucune icône</button><button class="btn" data-ipx>Annuler</button>`
+    });
+    const finish = v => { if (done) return; done = true; m.close(); resolve(v); };
+    const grid = $('[data-ipg]', m.el);
+    const cell = v => `<button type="button" class="ip-i ${v === current ? 'on' : ''}" data-ipv="${esc(v)}" title="${esc(v.replace(/^lucide:/, ''))}">${symHtml(v)}</button>`;
+    const show = i => {
+      $$('[data-ipc]', m.el).forEach(b => b.classList.toggle('on', b.dataset.ipc === String(i)));
+      grid.innerHTML = i === 'emoji' ? EMOJIS.map(cell).join('') : ICON_SETS[i][1].map(x => cell('lucide:' + x.n)).join('');
+    };
+    show(0);
+    $('[data-ipq]', m.el).addEventListener('input', async e => {
+      const q = e.target.value.trim().toLowerCase();
+      if (!q) return show(0);
+      $$('[data-ipc]', m.el).forEach(b => b.classList.remove('on'));
+      const seen = new Set(), out = [];
+      for (const [, list] of ICON_SETS) for (const x of list) if ((x.n + ' ' + x.fr).toLowerCase().includes(q) && !seen.has(x.n)) { seen.add(x.n); out.push(x.n); }
+      if (!LUCIDE_INDEX) { try { LUCIDE_INDEX = await (await fetch('/icons/lucide-index.json')).json(); } catch { LUCIDE_INDEX = {}; } }
+      if (e.target.value.trim().toLowerCase() !== q) return; // une autre frappe a eu lieu entre-temps
+      for (const [n, tags] of Object.entries(LUCIDE_INDEX)) {
+        if (out.length >= 160) break;
+        if (!seen.has(n) && (n.includes(q) || tags.includes(q))) { seen.add(n); out.push(n); }
+      }
+      grid.innerHTML = out.length ? out.map(n => cell('lucide:' + n)).join('') : '<div class="muted small" style="grid-column:1/-1;padding:12px">Aucune icône trouvée. Essaie en anglais (ex. « server », « film »).</div>';
+    });
+    m.el.addEventListener('click', e => {
+      const c = e.target.closest('[data-ipc]'); if (c) { $('[data-ipq]', m.el).value = ''; show(c.dataset.ipc === 'emoji' ? 'emoji' : Number(c.dataset.ipc)); return; }
+      const v = e.target.closest('[data-ipv]'); if (v) return finish(v.dataset.ipv);
+      if (e.target.closest('[data-ipnone]')) return finish('');
+      if (e.target.closest('[data-ipx]')) return finish(null);
+    });
+    const obs = new MutationObserver(() => { if (!m.el.isConnected) { obs.disconnect(); finish(null); } });
+    obs.observe(document.body, { childList: true, subtree: true });
+    setTimeout(() => $('[data-ipq]', m.el)?.focus(), 50);
+  });
+}
+// relie les boutons « Choisir… » d'un formulaire à la fenêtre de choix
+function bindIconPick(root) {
+  root.addEventListener('click', async e => {
+    const b = e.target.closest('[data-iconpick]');
+    if (!b) return;
+    e.preventDefault();
+    const inp = b.parentElement.querySelector('input[type=hidden]');
+    const v = await pickIcon(inp.value);
+    if (v === null) return;
+    inp.value = v;
+    b.innerHTML = (v ? symHtml(v) : '<span class="muted">Aucune</span>') + '<span class="small muted">Choisir…</span>';
+  });
+}
+
 function optionField(o, val) {
   const v = val ?? o.default ?? '';
   switch (o.type) {
@@ -2376,6 +2455,8 @@ function optionField(o, val) {
     case 'select': return `<label>${esc(o.label)}<select name="opt_${o.key}">${o.options.map(x => `<option ${x === v ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>`;
     case 'textarea': return `<label>${esc(o.label)}<textarea name="opt_${o.key}">${esc(v)}</textarea></label>`;
     case 'city': return `<label>${esc(o.label)}<div style="display:flex;gap:8px"><input name="opt_${o.key}" value="${esc(v)}" style="flex:1"><button class="btn" type="button" data-geo>Rechercher</button></div></label><div class="geo-res" data-geores></div>`;
+    case 'icon': return `<label>${esc(o.label)}<span class="icon-field"><input type="hidden" name="opt_${o.key}" value="${esc(v)}">
+      <button type="button" class="btn icon-pick" data-iconpick>${v ? symHtml(v) : '<span class="muted">Aucune</span>'}<span class="small muted">Choisir…</span></button></span></label>`;
     default: return `<label>${esc(o.label)}<input name="opt_${o.key}" value="${esc(v)}"></label>`;
   }
 }
@@ -2402,7 +2483,7 @@ function widgetForm(orig) {
       </div>
       <div class="row2">
         <label>Hauteur en px (0 = automatique, -1 = aligner)<input type="number" name="h" min="-1" step="10" value="${Number(w.h) || 0}"></label>
-        ${orig.id ? `<label>Onglet<select name="tab">${S.dash.pages.map(pg => `<option value="${pg.id}" ${pg.id === page().id ? 'selected' : ''}>${esc(pg.icon || '')} ${esc(pg.name)}</option>`).join('')}</select></label>` : '<div></div>'}
+        ${orig.id ? `<label>Onglet<select name="tab">${S.dash.pages.map(pg => `<option value="${pg.id}" ${pg.id === page().id ? 'selected' : ''}>${/^lucide:/.test(pg.icon || '') ? '' : esc(pg.icon || '')} ${esc(pg.name)}</option>`).join('')}</select></label>` : '<div></div>'}
       </div>
       <label class="chk"><input type="checkbox" name="hideMobile" ${w.hideMobile ? 'checked' : ''}> Masquer sur téléphone (écran de moins de 760 px)</label>
       ${orig.id ? `<label>Aligner le haut sur
@@ -2420,6 +2501,7 @@ function widgetForm(orig) {
     footer: '<button class="btn" data-cancel>Annuler</button><button class="btn primary" data-save>Enregistrer</button>'
   });
   const form = $('#wForm', m.el);
+  bindIconPick(form);
 
   // --- éditeur de favoris ---
   let cats = clone(w.config?.categories || []);
