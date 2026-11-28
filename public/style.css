@@ -664,3 +664,6 @@ kbd { font: 11.5px ui-monospace, monospace; background: var(--bg2); border: 1px 
 .chip-btn:hover { background: color-mix(in srgb, var(--warn) 18%, transparent); }
 
 .dk-act { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.smart-ack { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.btn.link { background: none; border: 0; color: var(--accent); padding: 0 2px; text-decoration: underline; }

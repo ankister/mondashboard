@@ -12,7 +12,7 @@ const zlib = require('node:zlib');
 const crypto = require('node:crypto');
 const { execFile, spawn } = require('node:child_process');
 
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 const env = (k, d) => (process.env[k] === undefined || process.env[k] === '' ? d : process.env[k]);
 const CFG = {
   token: env('HD_TOKEN', ''),
@@ -241,7 +241,8 @@ async function scanSmart() {
       type: nv ? 'nvme' : (j.rotation_rate === 0 ? 'ssd' : 'hdd'),
       temp: j.temperature?.current ?? nv?.temperature ?? null,
       hours: j.power_on_time?.hours ?? null, wear: nv?.percentage_used ?? null,
-      passed, health, notes, standby: false
+      passed, health, notes, standby: false,
+      counters: { errlog: j.ata_smart_error_log?.summary?.count ?? j.ata_smart_error_log?.extended?.count ?? null }
     });
   }
   state.disks = result;

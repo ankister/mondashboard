@@ -12,6 +12,7 @@ import { seed } from './lib/seed.js';
 import { agentRoutes } from './lib/agentSetup.js';
 import { lastSeen } from './lib/integrations/agent.js';
 import { cleanTheme, themeCss, themeMeta } from './lib/themes.js';
+import { applySmartAck, setSmartAck } from './lib/smartAck.js';
 
 const PORT = Number(process.env.PORT || 3080);
 const PKG = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
@@ -286,10 +287,20 @@ app.get('/api/widgets/:pageId/:widgetId', requireView, wrap(async req => {
   // live=1 : suivi d'une action en cours (mise à jour d'un conteneur…), on ne garde le cache que 2 s
   const ttl = req.query.live === '1' ? 2000 : Math.max(2000, w.refresh * 1000 * 0.8);
   const c = cache.get(key);
-  if (c && Date.now() - c.at < ttl) return c.data;
+  // alertes SMART acquittées : appliquées à la lecture, pour qu'un acquittement soit visible tout de suite
+  const ack = d => (WIDGETS[found.type]?.kind === 'machine' ? applySmartAck(d, d?.integrationId || found.integrations?.[0]) : d);
+  if (c && Date.now() - c.at < ttl) return ack(c.data);
   const data = await widgetData(w);
   cache.set(key, { at: Date.now(), data });
-  return data;
+  return ack(data);
+}));
+
+// Acquitter (ou réafficher) les alertes SMART d'une machine
+app.post('/api/smart-ack', requireAdmin, wrap(req => {
+  const { integrationId, disks, clear } = req.body || {};
+  if (!load().integrations.some(i => i.id === integrationId)) throw bad('Intégration inconnue', 404);
+  setSmartAck(integrationId, Array.isArray(disks) ? disks.slice(0, 64) : [], !!clear);
+  return { ok: true };
 }));
 
 // Enregistrement d'une note (widget Notes)

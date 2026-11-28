@@ -1370,6 +1370,21 @@ const RENDER = {
 
   machine: {
     bind(w, el) {
+      // acquittement des alertes SMART
+      el.addEventListener('click', async e => {
+        const b = e.target.closest('[data-sack]');
+        if (!b) return;
+        const d = S.cache[w.id];
+        if (!d?.integrationId) return;
+        const clear = b.dataset.sack === 'clear';
+        const disks = (d.disks || []).filter(k => Object.keys(k.counters || {}).length).map(k => ({ key: k.ackKey, counters: k.counters }));
+        if (!clear && !confirm(`Acquitter les alertes SMART de ${disks.length} disque(s) ?\n\nElles seront masquées tant qu'aucun compteur n'augmente. Les alertes graves (test SMART en échec, disque qui ne répond plus) restent toujours affichées.`)) return;
+        try {
+          await api('/smart-ack', { method: 'POST', body: { integrationId: d.integrationId, disks, clear } });
+          toast(clear ? 'Alertes SMART réaffichées' : 'Alertes SMART acquittées ✓');
+          loadWidget(w);
+        } catch (err) { toast(err.message, true); }
+      });
       // mises à jour Home Assistant : installer / ignorer depuis le widget
       el.addEventListener('click', async e => {
         const b = e.target.closest('[data-upd]');
@@ -1459,6 +1474,14 @@ const RENDER = {
           </span>`).join('')}</div>`;
         const issues = d.disks.filter(k => k.notes?.length);
         if (issues.length) disks += issues.map(k => `<div class="w-warn">⚠ ${esc(k.name)} : ${esc(k.notes.join(', '))}</div>`).join('');
+        // acquittement : masque les alertes tant qu'aucun compteur n'augmente
+        const ackable = issues.filter(k => Object.keys(k.counters || {}).length);
+        if (canEdit() && d.integrationId && (ackable.length || d.smartAcked)) {
+          disks += `<div class="smart-ack">
+            ${ackable.length ? `<button class="btn sm" data-sack="ack" title="Masque ces alertes tant qu'aucun compteur n'augmente (les alertes graves restent affichées)">✓ Acquitter</button>` : ''}
+            ${d.smartAcked ? `<span class="muted small">${d.smartAcked} disque(s) avec alertes acquittées</span> <button class="btn sm link" data-sack="clear">Réafficher</button>` : ''}
+          </div>`;
+        }
       } else if (c.showDisks !== false && d.smartAvailable === false) {
         disks = '<div class="muted small" style="margin-top:8px">SMART indisponible (Glances doit tourner en root avec accès aux disques).</div>';
       }
